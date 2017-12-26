@@ -1,4 +1,4 @@
-##Idoalapu elosztott utemezes Linux alatt - Diplomaterv, 2017
+## Idoalapu elosztott utemezes Linux alatt - Diplomaterv, 2017
 
 Diplomatervhez kotodo fajlok:
 
