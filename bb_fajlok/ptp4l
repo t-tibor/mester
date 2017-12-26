@@ -1,0 +1,77 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          ptp4l
+# Required-Start:    $local_fs $network
+# Required-Stop:     $local_fs
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: ptp4l
+# Description:       linuxptp ptp4l service
+### END INIT INFO
+
+# processname: ptp4l
+#
+
+# Some things that run always
+
+
+DAEMON="/usr/local/sbin/ptp4l"
+#DAEMON2="/usr/local/sbin/phc2sys"
+#ARGS="-f /home/debian/ptp4l.conf"
+ARGS="-i eth0"
+#ARGS2="-s eth0 -w"
+OPTIONS="--chuid root --oknodo --quiet"
+#background
+#PIDFILE=/var/run/ptp4l.pid
+
+
+###
+d_start() {
+    ### Start daemons, perhaps with the daemon function
+    #/usr/local/sbin/ptp4l -f /home/udooer/dipt1/ptp4l.conf &
+    start-stop-daemon --start $OPTIONS --exec $DAEMON -- $ARGS
+    #start-stop-daemon --start $OPTIONS --eyec $DAEMON2 --$ARGS2
+    ### Create the lock file
+    #touch /var/lock/subsys/ptp4l
+	### It enables the used GPIO block for PPS
+    sleep 20
+	echo 69 > /sys/class/gpio/export
+	#echo 44 > /sys/class/gpio/export
+}
+
+###
+d_stop() {
+    #Stop daemons, perhaps with the killproc function
+    start-stop-daemon --stop $OPTIONS --exec $DAEMON
+    #start-stop-daemon --stop $OPTIONS --exec $DAEMON2
+    ### Delete the lock file
+    #rm -f /var/lock/subsys/ptp4l
+	### Disable GPIO block
+	echo 69 > /sys/class/gpio/unexport
+	#echo 44 > /sys/class/gpio/unexport
+}
+
+case "$1" in
+	start)
+		echo -n "Starting ptp4l and phc2sys services: "
+        d_start
+	;;
+	stop)
+		echo -n "Shutting down ptp4l and phc2sys services: "
+        d_stop
+	;;
+	status)
+		#<report the status of the daemons in free-form format,
+		#perhaps with the status function>
+	;;
+	restart | reload)
+		# Restart the daemons, normally with '$0 stop; $0 start'
+        d_stop && sleep 2 && d_start
+	;;
+	*)
+		echo "Usage: ptp4l {start|stop|status|reload|restart}"
+		exit 1
+	;;
+esac
+
+exit 0

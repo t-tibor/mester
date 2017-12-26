@@ -1,0 +1,20 @@
+#!/bin/bash
+
+if [ "$(id -u)" != "0" ]; then
+   echo "This script must be run as root - use sudo"
+   exit 1
+fi
+
+echo "Compiling the overlay from .dts to .dtbo"
+dtc -O dtb -o VD-DMTIMER5-PRU-PPS-00A0.dtbo -b 0 -@ VD-DMTIMER5-PRU-PPS.dts
+
+sudo cp -v VD-DMTIMER5-PRU-PPS-00A0.dtbo /lib/firmware
+
+#&& echo VD-GPIO-DMTIMER5 > /sys/devices/platform/bone_capemgr/slots
+#echo 69 > /sys/class/gpio/export
+
+echo "OK!"	
+exit 0
+
+# add "CAPE=BB-SPI1-01" to /etc/default/capemgr
+

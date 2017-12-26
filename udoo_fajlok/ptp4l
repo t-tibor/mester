@@ -1,0 +1,60 @@
+#!/bin/sh
+#
+# /etc/init.d/ptp4l#
+# <description of the ptp4l service>
+#
+
+# processname: ptp4l
+#
+
+# Some things that run always
+
+
+DAEMON="/usr/local/sbin/ptp4l"
+ARGS="-f /home/udooer/dipt1/ptp4l.conf"
+OPTIONS="--chuid root --oknodo --quiet"
+#background
+#PIDFILE=/var/run/ptp4l.pid
+
+
+###
+d_start() {
+    ### Start daemons, perhaps with the daemon function
+    #/usr/local/sbin/ptp4l -f /home/udooer/dipt1/ptp4l.conf &
+    start-stop-daemon --start $OPTIONS --exec $DAEMON -- $ARGS
+    ### Create the lock file
+    #touch /var/lock/subsys/ptp4l
+}
+
+###
+d_stop() {
+    #Stop daemons, perhaps with the killproc function
+    start-stop-daemon --stop $OPTIONS --exec $DAEMON
+    ### Delete the lock file
+    #rm -f /var/lock/subsys/ptp4l
+}
+
+case "$1" in
+	start)
+		echo -n "Starting ptp4l services: "
+        d_start
+	;;
+	stop)
+		echo -n "Shutting down ptp4l services: "
+        d_stop
+	;;
+	status)
+		#<report the status of the daemons in free-form format,
+		#perhaps with the status function>
+	;;
+	restart | reload)
+		# Restart the daemons, normally with '$0 stop; $0 start'
+        d_stop && sleep 2 && d_start
+	;;
+	*)
+		echo "Usage: ptp4l {start|stop|status|reload|restart}"
+		exit 1
+	;;
+esac
+
+exit 0
