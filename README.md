@@ -1,11 +1,7 @@
-## Idoalapu elosztott utemezes Linux alatt - Diplomaterv, 2017
+## Important files
 
-Diplomatervhez kotodo fajlok:
-
-- Beaglebone PPS projekt
-- UDOO Neo PPS projekt
-- Device tree overlay fajlok
-- ptp4l (linuxptp) konfiguracios fajlok
-- init szkriptek
-- PRU program (PPS alapu utemezes)
-- Linux kernel modulok idoalapu utemezesre
+./bb_fajlok/BBonePPS/src:				Source code of the PPS generator user space program
+./bb_fajlok/device_tree_overlay: 		Overlay for the pin configuration
+./bb_fajlok/ptp4l: 						ptp4l init script
+./bb_fajlok/ptp4l.conf: 				ptp4l configuration template
+./bb_fajlok/kernel_patching/my_ker...	Update script that copies the files of the new kernel to their location
