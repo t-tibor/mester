@@ -9,7 +9,7 @@
  */
 
 #define CALLB_1_NSEC  100000L // 5000L
-#define KTHREAD_1_NSEC   100000L //64000L 
+#define KTHREAD_1_NSEC  64000L // 100000L
 
  //#define GPIO_PIN 67
 #define GPIO_PIN 44

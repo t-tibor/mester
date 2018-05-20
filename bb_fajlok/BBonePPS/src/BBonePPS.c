@@ -33,7 +33,7 @@ int32_t error_prev2	= 0;
 int32_t deviation	= 0;
 int32_t deltadev	= 0;
 float fpDeviation	= 0;
-
+int locked_up		= 0;
 
 /* Callback called when SIGINT is sent to the process (Ctrl-C) */
 void signal_handler(int sig)
@@ -263,7 +263,7 @@ int main(int argc, char *argv[])
 			if(abs(error_now) > STEP_MINERROR)
 			{
 				stepVal = (error_now/42);
-				*timer_counter = (uint32_t)(*timer_counter + stepVal);
+				*timer_counter = (uint32_t)(*timer_counter + stepVal+470);
 
 				if(verbose)
 				{
@@ -277,11 +277,13 @@ int main(int argc, char *argv[])
 
 		    	continue; // Next while cycle
 			}
-
-			else { step = 0; } // < STEP_MINERROR
+			else 
+			{
+				printf("Starting PI servo\n");
+				step = 0; 
+			} // < STEP_MINERROR
 
 		} // IF_STEP
-
 
 		count++;
 		if(count%sleepT) { continue; }
@@ -312,6 +314,11 @@ int main(int argc, char *argv[])
 			*timer_load = DMTIMER_1SEC + deviation;
 		}
 
+		if(locked_up == 0 && (error_now == error_prev) && error_now > -100 && error_now < 100)
+		{
+			locked_up = 1; 
+			printf("Phase 3 locked.\n");
+		}
 
 		if(verbose)
 		{
