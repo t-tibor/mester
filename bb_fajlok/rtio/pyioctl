@@ -1,0 +1,16 @@
+#!/usr/bin/python
+
+import sys
+import fcntl
+
+if len(sys.argv) != 4:
+	print "Usage: pyioctl </dev/mydev> <ioctl_cmd_num> <ioctl arg>"
+	exit(1)
+
+fname = sys.argv[1]
+ioctl_num = int(sys.argv[2])
+ioctl_arg = int(sys.argv[3])
+
+with open(fname) as f:
+	fcntl.ioctl(f,ioctl_num,ioctl_arg)
+
