@@ -51,18 +51,18 @@ wr $CLOCK_CTRL_BASE $CLOCK_CTRL_TIM6_OFFSET 0x00000002
 
 
 echo "Resettings timers"
-wr $TIMER5_BASE "0x54" "0x00000002"
+#wr $TIMER5_BASE "0x54" "0x00000002"
 wr $TIMER6_BASE "0x54" "0x00000002"
 
 
 
 echo "Setting up timer for input capture:"
-wr $TIMER5_BASE "0x38" "0x00000103"
+#wr $TIMER5_BASE "0x38" "0x00000103"
 wr $TIMER6_BASE "0x38" "0x00000103"
 
 echo "GETTING TIMER REGISTERS"
-echo "Timer5"
-dump_regs5
+#echo "Timer5"
+#dump_regs5
 echo "Timer 6"
 dump_regs6
 
@@ -71,9 +71,13 @@ dump_regs6
 
 
 echo "Changing timer 5 and 6 event mux to gpioINT0A (17<<8+17 = 4369)"
-python pyioctl /dev/event_mux 0 4369
+python pyioctl /dev/DMTimer6 48 17
+#python pyioctl /dev/DMTimer5 33 17
 echo "TIMER EVETNT REG:"
 rd 0x44e10000 0xfd0
+
+echo "Enabling timer interrupt"
+wr $TIMER6_BASE "0x2C" 0x4
 
 
 echo "Triggering GPIO0 interrupt"

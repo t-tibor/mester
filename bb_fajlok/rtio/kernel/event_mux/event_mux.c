@@ -7,6 +7,8 @@
 
 #include <linux/miscdevice.h>
 
+#include "./event_mux.h"
+
 
 // char dev interface
 static struct miscdevice misc;
@@ -24,20 +26,74 @@ static struct file_operations dev_fops;
 #define CM_SECTION_START		((CONTROL_MODULE_BASE) + (TIMER_EVT_CAPT_OFFSET))
 #define CM_SECTION_LENGTH		12			// 12 byte region
 
-
-
 volatile void __iomem *timer_evt_capt_reg = NULL;
 volatile void __iomem *ecap_evt_capt_reg = NULL;
 volatile void __iomem *adc_evt_capt_reg = NULL;
 
+
+// <------------------------------ RAW INTERFACE ------------------------------>
+
+int event_mux_set_dmtimer_event(u32 timer_idx, u32 event_id)
+{
+	u32 reg_val;
+	int sh;
+
+	if(timer_idx < 5 || timer_idx > 7)
+		return -EINVAL;
+
+	if(event_id > 30) 
+		return -EINVAL;
+
+	sh = (timer_idx-5)*8;
+
+	reg_val = ioread32(timer_evt_capt_reg);
+	reg_val &= ~(0xFF << sh);
+	reg_val |= (event_id << sh);
+
+	iowrite32(reg_val, timer_evt_capt_reg);
+	return 0;
+}
+EXPORT_SYMBOL_GPL(event_mux_set_dmtimer_event);
+
+int event_mux_set_ecap_event(u32 ecap_idx, u32 event_id)
+{
+	u32 reg_val;
+	int sh;
+
+	if(ecap_idx > 2)
+		return -EINVAL;
+
+	if(event_id > 30) 
+		return -EINVAL;
+
+	sh = (ecap_idx)*8;
+
+	reg_val = ioread32(ecap_evt_capt_reg);
+	reg_val &= ~(0xFF << sh);
+	reg_val |= (event_id << sh);
+
+	iowrite32(reg_val, ecap_evt_capt_reg);
+	return 0;
+}
+EXPORT_SYMBOL_GPL(event_mux_set_ecap_event);
+
+int event_mux_set_adc_event(u32 event_id)
+{
+	if(event_id > 4) 
+		return -EINVAL;
+	iowrite32(event_id, adc_evt_capt_reg);
+	return 0;
+}
+EXPORT_SYMBOL_GPL(event_mux_set_adc_event);
+
+
+// <-------------------------- CHAR DEVICE INTERFACE -------------------------->
 //////////////////////////////////////////////
 // ioctl commands
 //////////////////////////////////////////////
 #define IOCTL_SET_DMTIMER_EVT 	0
 #define IOCTL_SET_ECAP_EVT		1
 #define IOCTL_SET_ADC_EVT		2
-
-
 
 static ssize_t dev_open(struct inode *inode, struct file *pfile)
 {
@@ -55,29 +111,27 @@ static int dev_close (struct inode *inode, struct file *pfile)
 static long dev_ioctl(struct file *pfile, unsigned int cmd, unsigned long arg)
 {
 	uint32_t reg_val = (uint32_t) arg;
-	uint32_t tmp1, tmp2;
+	int ret = 0;
+
 
 	switch(cmd)
 	{
 		case IOCTL_SET_DMTIMER_EVT:
-			tmp1 = ioread32(timer_evt_capt_reg);
-			iowrite32(reg_val, timer_evt_capt_reg);
-			tmp2 = ioread32(timer_evt_capt_reg);
-			pr_info("Val: 0x%x, before write: 0x%x, after write: 0x%x",reg_val,tmp1,tmp2);
+			//ret = event_mux_set_dmtimer_event(reg_val);
+			pr_info("Writing to reg: %p, val:0x%x",timer_evt_capt_reg,reg_val);
 		break;
 		case IOCTL_SET_ECAP_EVT:
-			iowrite32(reg_val, ecap_evt_capt_reg);
+			//ret = event_mux_set_ecap_event(reg_val);
 			pr_info("Writing to reg: %p, val:0x%x",ecap_evt_capt_reg,reg_val);
 		break;
 		case IOCTL_SET_ADC_EVT:
-			iowrite32(reg_val, adc_evt_capt_reg);
+			//ret = event_mux_set_adc_event(reg_val);
 			pr_info("Writing to reg: %p, val:0x%x",adc_evt_capt_reg,reg_val);
 		break;
 		default:
-		pr_err("Unknown ioctl command: %d\n",cmd);
+			pr_err("Unknown ioctl command: %d\n",cmd);
 	}
-	return 0;
-
+	return ret;
 }
 
 
@@ -148,4 +202,4 @@ module_exit(event_mux_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Tusori Tibor");
-MODULE_DESCRIPTION("User space driver support for BeagleBon timers.");
+MODULE_DESCRIPTION("User space driver support for BeagleBone timers.");
