@@ -54,13 +54,13 @@ TODO:
 struct DMTimer_priv
 {
 	char *name;
-	uint32_t idx;
+	u32 idx;
 	int irq;
 	struct clk *fclk;
 
 	void __iomem *io_base;				// kernel virtual address
 	unsigned long regspace_phys_base;	// physical base address
-	uint32_t regspace_size;				// memory region size
+	u32 regspace_size;				// memory region size
 
 	struct miscdevice misc;
 	struct platform_device *pdev;
@@ -99,7 +99,7 @@ static int timer_set_clk_state(struct DMTimer_priv *timer, u32 arg)
 
 #define CLOCK_SOURCE_SYSCLK		0x01
 #define	CLOCK_SOURCE_TCLKIN		0x02
-static int timer_set_clksource(struct DMTimer_priv *timer, uint32_t source)
+static int timer_set_clksource(struct DMTimer_priv *timer, u32 source)
 {
 	const char *parent_name;
 	struct clk *parent;
@@ -205,6 +205,7 @@ static long timer_cdev_ioctl(struct file *pfile, unsigned int cmd, unsigned long
 
 		default:
 			dev_err(&timer->pdev->dev,"Invalid IOCTL command : %d.\n",cmd);
+			ret = -ENOTTY;
 			break;
 	}
 	return ret;
@@ -225,16 +226,15 @@ static irqreturn_t timer_irq_handler(int irq, void *data)
 {
 	struct DMTimer_priv *timer= (struct DMTimer_priv*)data;
 	// clear interrupt line and save the input capture flag
-	uint32_t irq_status;
-	uint32_t ts;
+	u32 irq_status;
+	u32 ts;
 
-	irq_status = readl_relaxed(timer->io_base + TIMER_IRQSTATUS_OFFSET);
-	// clear interrupt flag
-	iowrite32(irq_status,timer->io_base + TIMER_IRQSTATUS_OFFSET);
+	irq_status = readl(timer->io_base + TIMER_IRQSTATUS_OFFSET);
+
 
 	if(irq_status & TCAR_IT_FLAG)
 	{
-		ts = ioread32(timer->io_base + TIMER_TCAR1_OFFSET);
+		ts = readl(timer->io_base + TIMER_TCAR1_OFFSET);
 
 		icap_add_ts(timer->icap,ts,irq_status & OVF_IT_FLAG);
 	}
@@ -243,6 +243,10 @@ static irqreturn_t timer_irq_handler(int irq, void *data)
 	{
 		icap_signal_timer_ovf(timer->icap);
 	}
+
+		// clear interrupt flag
+	readl(irq_status,timer->io_base + TIMER_IRQSTATUS_OFFSET);
+
 	return IRQ_HANDLED;
 }
 

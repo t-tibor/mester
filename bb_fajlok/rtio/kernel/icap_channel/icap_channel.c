@@ -2,6 +2,12 @@
 
 #include <linux/string.h>
 
+
+// TODO
+// rethink channel deletion (maybe there are still readers)
+
+
+
 struct file_operations icap_cdev_fops;
 void icap_channel_bh(unsigned long arg);
 
