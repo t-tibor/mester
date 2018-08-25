@@ -28,6 +28,7 @@
 #include <linux/pm_runtime.h>
 
 #include "../event_mux/event_mux.h"
+#include "../icap_channel/icap_channel.h"
 
 
 // DMTimer register offsets
@@ -50,15 +51,6 @@ TODO:
 
 // type declarations
 
-struct circular_buffer
-{
-	uint32_t *buffer;
-	uint32_t head;
-	uint32_t tail;
-	uint32_t length;
-	int ovf;
-};
-
 struct DMTimer_priv
 {
 	char *name;
@@ -73,7 +65,8 @@ struct DMTimer_priv
 	struct miscdevice misc;
 	struct platform_device *pdev;
 
-	struct circular_buffer circ_buf;
+	char * icap_channel_name;
+	struct icap_channel *icap;
 };
 
 
@@ -217,99 +210,13 @@ static long timer_cdev_ioctl(struct file *pfile, unsigned int cmd, unsigned long
 	return ret;
 }
 
-static ssize_t timer_cdev_read (struct file *pfile, char __user *buff, size_t len, loff_t *ppos)
-{
-	struct miscdevice *misc_dev = (struct miscdevice*) (pfile->private_data);
-	struct DMTimer_priv * timer = container_of(misc_dev, struct DMTimer_priv, misc);
-	struct circular_buffer *circ = &timer->circ_buf;
-	// get data count from the circular buffer
-
-	uint32_t head = smp_load_acquire(&circ->head);
-	uint32_t tail = circ->tail;
-	uint32_t data_cnt = CIRC_CNT(head,tail,circ->length);
-	uint32_t buff_capa = len/4;
-	uint32_t data_to_read = min(data_cnt, buff_capa);
-	uint32_t data_to_end = CIRC_CNT_TO_END(head,tail,circ->length);
-	uint32_t step1_length = min(data_to_read,data_to_end);
-	uint32_t step2_length = data_to_read - step1_length;
-
-
-	if (data_to_read >= 1) 
-	{
-		// worst case we need to copy the data in 2 steps, if the data block is at the end of the buffer
-		if(copy_to_user(buff,&circ->buffer[tail],step1_length*sizeof(uint32_t)))
-			return -EFAULT;
-
-		smp_store_release(&circ->tail,
-				  (tail + step1_length) & (circ->length - 1));
-
-		if(step2_length > 0)
-		{
-			if(copy_to_user(buff+step1_length*sizeof(uint32_t),&circ->buffer[tail],step2_length*sizeof(uint32_t)))
-				return -EFAULT;
-
-			smp_store_release(&circ->tail,
-				  (tail + step2_length) & (circ->length - 1));
-		}
-	}
-
-	return data_to_read*sizeof(uint32_t);
-
-}
 
 static struct file_operations timer_cdev_fops = 
 {
 	.open = timer_cdev_open,
-	.mmap = timer_cdev_mmap,
 	.release = timer_cdev_close,
-	.read = timer_cdev_read,
+	.mmap = timer_cdev_mmap,
 	.unlocked_ioctl = timer_cdev_ioctl
-};
-
-// <------------------------  SYSFS INTERFACE ------------------------>
-
-static ssize_t timer_data_cnt_show(struct device *dev,
-        struct device_attribute *attr, char *buf)
-{
-	u32 head, tail, size;
-    struct DMTimer_priv *timer = dev_get_drvdata(dev);
-    int len;
-
-	head = READ_ONCE(timer->circ_buf.head);
-	tail = READ_ONCE(timer->circ_buf.tail);
-	size = CIRC_CNT(head,tail,timer->circ_buf.length);
-
-    len = sprintf(buf, "%d\n", size);
-    if (len <= 0)
-        dev_err(dev, "[%s:%d]: Invalid sprintf len: %d\n", __FUNCTION__,__LINE__,len);
-
-    return len;
-}
-static DEVICE_ATTR(data_count, S_IRUGO, timer_data_cnt_show,NULL);
-
-static ssize_t timer_ovf_cnt_show(struct device *dev,
-        struct device_attribute *attr, char *buf)
-{
-    struct DMTimer_priv *timer = dev_get_drvdata(dev);
-    int len;
-
-    len = sprintf(buf, "%d\n", timer->circ_buf.ovf);
-    if (len <= 0)
-        dev_err(dev, "[%s:%d]: Invalid sprintf len: %d\n", __FUNCTION__,__LINE__,len);
-
-    return len;
-}
-static DEVICE_ATTR(ovf_count, S_IRUGO, timer_ovf_cnt_show,NULL);
-
-static struct attribute *buffer_attrs[] = {
-    &dev_attr_data_count.attr,
-    &dev_attr_ovf_count.attr,
-    NULL
-};
-
-static struct attribute_group buffer_group = {
-    .name = "buffer",
-    .attrs = buffer_attrs,
 };
 
 
@@ -319,8 +226,7 @@ static irqreturn_t timer_irq_handler(int irq, void *data)
 	struct DMTimer_priv *timer= (struct DMTimer_priv*)data;
 	// clear interrupt line and save the input capture flag
 	uint32_t irq_status;
-	uint32_t icap;
-	uint32_t head,tail;
+	uint32_t ts;
 
 	irq_status = readl_relaxed(timer->io_base + TIMER_IRQSTATUS_OFFSET);
 	// clear interrupt flag
@@ -328,25 +234,14 @@ static irqreturn_t timer_irq_handler(int irq, void *data)
 
 	if(irq_status & TCAR_IT_FLAG)
 	{
-		icap = ioread32(timer->io_base + TIMER_TCAR1_OFFSET);
-		// put input capture data to the circular buffer
+		ts = ioread32(timer->io_base + TIMER_TCAR1_OFFSET);
 
-		head = timer->circ_buf.head;
-		tail = READ_ONCE(timer->circ_buf.tail);
+		icap_add_ts(timer->icap,ts,irq_status & OVF_IT_FLAG);
+	}
 
-		if (CIRC_SPACE(timer->circ_buf.head, timer->circ_buf.tail, timer->circ_buf.length) >= 1) 
-		{
-			/* insert one item into the buffer */
-			timer->circ_buf.buffer[head] = icap;
-
-			smp_store_release(&timer->circ_buf.head,
-					  (head + 1) & (timer->circ_buf.length - 1));
-
-		}
-		else
-		{
-			timer->circ_buf.ovf++;
-		}
+	if(irq_status & OVF_IT_FLAG)
+	{
+		icap_signal_timer_ovf(timer->icap);
 	}
 	return IRQ_HANDLED;
 }
@@ -406,18 +301,6 @@ static int timer_probe(struct platform_device *pdev)
  	timer->regspace_size = resource_size(mem);
  	timer->regspace_phys_base = mem->start;
 
- 	// remapping irq
- 	timer->irq = irq->start;
- 	irq_name = devm_kasprintf(&pdev->dev, GFP_KERNEL, "%s%d_irq",
-					  dev_name(&pdev->dev),timer_idx);
- 	ret = devm_request_irq(&pdev->dev,timer->irq,timer_irq_handler,0,irq_name,timer);
- 	if(unlikely(ret))
- 	{
- 		dev_err(&pdev->dev, "%s:%d Interrupt allocation (irq:%d) failed [%d].\n", __func__,__LINE__,timer->irq,ret);
-		return -ENXIO;
- 	}
-
-
  	// get timer clock
  	timer->fclk = devm_clk_get(&pdev->dev,"fck");
  	if(IS_ERR(timer->fclk))
@@ -425,12 +308,6 @@ static int timer_probe(struct platform_device *pdev)
  		dev_err(&pdev->dev,"%s:%d Cannot get clock for the timer.\n",__FUNCTION__,__LINE__);
  		return -ENODEV;
  	}
-
- 	// init circular buffer
- 	timer->circ_buf.head = timer->circ_buf.tail = timer->circ_buf.ovf = 0;
- 	timer->circ_buf.length = 256;
- 	timer->circ_buf.buffer = devm_kzalloc(&pdev->dev,timer->circ_buf.length * sizeof(uint32_t), GFP_KERNEL);
-
 
  	// setup misc character device
  	timer->misc.fops = &timer_cdev_fops;
@@ -442,17 +319,33 @@ static int timer_probe(struct platform_device *pdev)
 		return -ENODEV;
 	}
 
+	timer->icap_channel_name = devm_kasprintf(&pdev->dev, GFP_KERNEL, "%s%d_icap",dev_name(&pdev->dev),timer_idx);
+	timer->icap = icap_create_channel(timer->icap_channel_name,10);
+	if(!timer->icap)
+	{
+		dev_err(&pdev->dev,"Cannot initialize icap channel: /dev/%s.\n",timer->misc.name);
+		misc_deregister(&timer->misc);
+		return -ENOMEM;
+	}
+
+	 // remapping irq
+ 	timer->irq = irq->start;
+ 	irq_name = devm_kasprintf(&pdev->dev, GFP_KERNEL, "%s%d_irq",
+					  dev_name(&pdev->dev),timer_idx);
+ 	ret = devm_request_irq(&pdev->dev,timer->irq,timer_irq_handler,0,irq_name,timer);
+ 	if(unlikely(ret))
+ 	{
+ 		dev_err(&pdev->dev, "%s:%d Interrupt allocation (irq:%d) failed [%d].\n", __func__,__LINE__,timer->irq,ret);
+ 		icap_delete_channel(timer->icap);
+ 		misc_deregister(&timer->misc);
+		return -ENXIO;
+ 	}
+
 
 	dev_info(&pdev->dev,"%s initialization succeeded.\n",timer->name);
 	dev_info(&pdev->dev,"Base address: 0x%lx, length: %u, irq num: %d.\n",timer->regspace_phys_base,timer->regspace_size,timer->irq);
 
  	platform_set_drvdata(pdev,timer);
-
- 	// set sysfs attributes
- 	if(sysfs_create_group(&pdev->dev.kobj, &buffer_group))
- 	{
- 		dev_err(&pdev->dev,"[%s:%d] Cannot create sysfs attributes.\n",__FUNCTION__,__LINE__);
- 	}
 
 
  	// start the timer interface clock
@@ -468,16 +361,17 @@ static int timer_probe(struct platform_device *pdev)
 
 static int timer_remove(struct platform_device *pdev)
 {
-	struct DMTimer_priv *priv;
+	struct DMTimer_priv *timer;
 	priv = platform_get_drvdata(pdev);
-
-	sysfs_remove_group(&pdev->dev.kobj, &buffer_group);
 
 	// stop the timer interface clock
 	pm_runtime_put_sync(&pdev->dev);
 	pm_runtime_disable(&pdev->dev);
 
-	misc_deregister(&priv->misc);
+	devm_free_irq(&pdev->dev, timer->irq, timer);
+	
+	icap_delete_channel(timer->icap);
+	misc_deregister(&timer->misc);
 
 	// all other resourcees are freed managed
 	return 0;
