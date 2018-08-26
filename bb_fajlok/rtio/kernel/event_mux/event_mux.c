@@ -10,10 +10,6 @@
 #include "./event_mux.h"
 
 
-// char dev interface
-static struct miscdevice misc;
-static struct file_operations dev_fops;
-
 
 ///////////////////////////////////////////////
 // Control module registers
@@ -30,8 +26,9 @@ volatile void __iomem *timer_evt_capt_reg = NULL;
 volatile void __iomem *ecap_evt_capt_reg = NULL;
 volatile void __iomem *adc_evt_capt_reg = NULL;
 
+static struct kobject *event_mux_kobj;
 
-// <------------------------------ RAW INTERFACE ------------------------------>
+// <------------------------------ KERNEL INTERFACE ------------------------------>
 
 int event_mux_set_dmtimer_event(u32 timer_idx, u32 event_id)
 {
@@ -55,6 +52,25 @@ int event_mux_set_dmtimer_event(u32 timer_idx, u32 event_id)
 }
 EXPORT_SYMBOL_GPL(event_mux_set_dmtimer_event);
 
+int event_mux_get_dmtimer_event(u32 timer_idx)
+{
+	u32 reg_val;
+	int sh;
+
+	if(timer_idx < 5 || timer_idx > 7)
+		return -EINVAL;
+
+
+	sh = (timer_idx-5)*8;
+
+	reg_val = ioread32(timer_evt_capt_reg);
+	reg_val >>= sh;
+	reg_val &= 0xFF;
+
+	return reg_val;
+}
+EXPORT_SYMBOL_GPL(event_mux_get_dmtimer_event);
+
 int event_mux_set_ecap_event(u32 ecap_idx, u32 event_id)
 {
 	u32 reg_val;
@@ -77,6 +93,25 @@ int event_mux_set_ecap_event(u32 ecap_idx, u32 event_id)
 }
 EXPORT_SYMBOL_GPL(event_mux_set_ecap_event);
 
+int event_mux_get_ecap_event(u32 ecap_idx)
+{
+	u32 reg_val;
+	int sh;
+
+	if(ecap_idx > 2)
+		return -EINVAL;
+
+
+	sh = (ecap_idx)*8;
+
+	reg_val = ioread32(ecap_evt_capt_reg);
+	reg_val >>= sh;
+	reg_val &= 0xFF;
+	return reg_val;
+}
+EXPORT_SYMBOL_GPL(event_mux_get_ecap_event);
+
+
 int event_mux_set_adc_event(u32 event_id)
 {
 	if(event_id > 4) 
@@ -86,62 +121,139 @@ int event_mux_set_adc_event(u32 event_id)
 }
 EXPORT_SYMBOL_GPL(event_mux_set_adc_event);
 
-
-// <-------------------------- CHAR DEVICE INTERFACE -------------------------->
-//////////////////////////////////////////////
-// ioctl commands
-//////////////////////////////////////////////
-#define IOCTL_SET_DMTIMER_EVT 	0
-#define IOCTL_SET_ECAP_EVT		1
-#define IOCTL_SET_ADC_EVT		2
-
-static ssize_t dev_open(struct inode *inode, struct file *pfile)
+int event_mux_get_adc_event(void)
 {
-	try_module_get(THIS_MODULE);
-	return 0;
+	return ioread32(adc_evt_capt_reg);
+}
+EXPORT_SYMBOL_GPL(event_mux_get_adc_event);
+
+
+// <------------------ SYSFS INTERFACE ----------------------->
+// timer 5
+static ssize_t dmtimer5_event_show(struct kobject *kobj, struct kobj_attribute *attr,
+                      char *buf)
+{
+        int event = event_mux_get_dmtimer_event(5);
+        return sprintf(buf,"%d\n",event);
 }
 
-
-static int dev_close (struct inode *inode, struct file *pfile)
+static ssize_t dmtimer5_event_store(struct kobject *kobj, struct kobj_attribute *attr,
+                      const char *buf, size_t count)
 {
-	module_put(THIS_MODULE);
-	return 0;
+		u32 event;
+        sscanf(buf, "%u", &event);
+        event_mux_set_dmtimer_event(5,event);
+        return count;
 }
 
-static long dev_ioctl(struct file *pfile, unsigned int cmd, unsigned long arg)
+static struct kobj_attribute dmtimer5_attribute =__ATTR(dmtimer5_event, 0660, dmtimer5_event_show,
+                                                   dmtimer5_event_store);
+
+// timer 6
+static ssize_t dmtimer6_event_show(struct kobject *kobj, struct kobj_attribute *attr,
+                      char *buf)
 {
-	uint32_t reg_val = (uint32_t) arg;
-	int ret = 0;
-
-
-	switch(cmd)
-	{
-		case IOCTL_SET_DMTIMER_EVT:
-			//ret = event_mux_set_dmtimer_event(reg_val);
-			pr_info("Writing to reg: %p, val:0x%x",timer_evt_capt_reg,reg_val);
-		break;
-		case IOCTL_SET_ECAP_EVT:
-			//ret = event_mux_set_ecap_event(reg_val);
-			pr_info("Writing to reg: %p, val:0x%x",ecap_evt_capt_reg,reg_val);
-		break;
-		case IOCTL_SET_ADC_EVT:
-			//ret = event_mux_set_adc_event(reg_val);
-			pr_info("Writing to reg: %p, val:0x%x",adc_evt_capt_reg,reg_val);
-		break;
-		default:
-			pr_err("Unknown ioctl command: %d\n",cmd);
-	}
-	return ret;
+        int event = event_mux_get_dmtimer_event(6);
+        return sprintf(buf,"%d\n",event);
 }
 
-
-static struct file_operations dev_fops =
+static ssize_t dmtimer6_event_store(struct kobject *kobj, struct kobj_attribute *attr,
+                      const char *buf, size_t count)
 {
-		.owner = THIS_MODULE,
-		.open = dev_open,
-		.release = dev_close,
-		.unlocked_ioctl = dev_ioctl
-};
+		u32 event;
+        sscanf(buf, "%u", &event);
+        event_mux_set_dmtimer_event(6,event);
+        return count;
+}
+
+static struct kobj_attribute dmtimer6_attribute =__ATTR(dmtimer6_event, 0660, dmtimer6_event_show,
+                                                   dmtimer6_event_store);
+
+
+
+
+// timer 7
+static ssize_t dmtimer7_event_show(struct kobject *kobj, struct kobj_attribute *attr,
+                      char *buf)
+{
+        int event = event_mux_get_dmtimer_event(7);
+        return sprintf(buf,"%d\n",event);
+}
+
+static ssize_t dmtimer7_event_store(struct kobject *kobj, struct kobj_attribute *attr,
+                      const char *buf, size_t count)
+{
+		u32 event;
+        sscanf(buf, "%u", &event);
+        event_mux_set_dmtimer_event(7,event);
+        return count;
+}
+
+static struct kobj_attribute dmtimer7_attribute =__ATTR(dmtimer7_event, 0660, dmtimer7_event_show,
+                                                   dmtimer7_event_store);
+
+
+
+
+// ecap0
+static ssize_t ecap0_event_show(struct kobject *kobj, struct kobj_attribute *attr,
+                      char *buf)
+{
+        int event = event_mux_get_ecap_event(0);
+        return sprintf(buf,"%d\n",event);
+}
+
+static ssize_t ecap0_event_store(struct kobject *kobj, struct kobj_attribute *attr,
+                      const char *buf, size_t count)
+{
+		u32 event;
+        sscanf(buf, "%u", &event);
+        event_mux_set_ecap_event(0,event);
+        return count;
+}
+
+static struct kobj_attribute ecap0_attribute =__ATTR(ecap0_event, 0660, ecap0_event_show,
+                                                   ecap0_event_store);
+
+// ecap1
+static ssize_t ecap1_event_show(struct kobject *kobj, struct kobj_attribute *attr,
+                      char *buf)
+{
+        int event = event_mux_get_ecap_event(1);
+        return sprintf(buf,"%d\n",event);
+}
+
+static ssize_t ecap1_event_store(struct kobject *kobj, struct kobj_attribute *attr,
+                      const char *buf, size_t count)
+{
+		u32 event;
+        sscanf(buf, "%u", &event);
+        event_mux_set_ecap_event(1,event);
+        return count;
+}
+
+static struct kobj_attribute ecap1_attribute =__ATTR(ecap1_event, 0660, ecap1_event_show,
+                                                   ecap1_event_store);
+
+// ecap2
+static ssize_t ecap2_event_show(struct kobject *kobj, struct kobj_attribute *attr,
+                      char *buf)
+{
+        int event = event_mux_get_ecap_event(2);
+        return sprintf(buf,"%d\n",event);
+}
+
+static ssize_t ecap2_event_store(struct kobject *kobj, struct kobj_attribute *attr,
+                      const char *buf, size_t count)
+{
+		u32 event;
+        sscanf(buf, "%u", &event);
+        event_mux_set_ecap_event(2,event);
+        return count;
+}
+
+static struct kobj_attribute ecap2_attribute =__ATTR(ecap2_event, 0660, ecap2_event_show,
+                                                   ecap2_event_store);
 
 
 static int __init event_mux_init(void)
@@ -166,15 +278,22 @@ static int __init event_mux_init(void)
 
 	pr_info("Event mux memory region remapped.");
 
-	misc.fops = &dev_fops;
-	misc.minor = MISC_DYNAMIC_MINOR;
-	misc.name = "event_mux";
-	if(misc_register(&misc))
+	event_mux_kobj = kobject_create_and_add("event_mux",kernel_kobj);
+	if(!event_mux_kobj)
 	{
-		pr_err("Couldn't initialize miscdevice /dev/event_mux.\n");
+		pr_err("Failed to create evet_mux kobject\n");
 		goto err2;
 	}
-	pr_info("Misc device initialized: /dev/event_mux.\n");
+
+
+        if (sysfs_create_file(event_mux_kobj, &dmtimer5_attribute.attr) ||
+        	sysfs_create_file(event_mux_kobj, &dmtimer6_attribute.attr) ||
+        	sysfs_create_file(event_mux_kobj, &dmtimer7_attribute.attr) ||
+        	sysfs_create_file(event_mux_kobj, &ecap0_attribute.attr) ||
+        	sysfs_create_file(event_mux_kobj, &ecap1_attribute.attr) ||
+        	sysfs_create_file(event_mux_kobj, &ecap2_attribute.attr)) {
+                pr_err("Failed to create an attribute file\n");
+        }
 
 
 
@@ -189,7 +308,7 @@ err:
 
 static void __exit event_mux_exit(void)
 {
-	misc_deregister(&misc);
+	kobject_put(event_mux_kobj);
 	if(timer_evt_capt_reg)
 	{
 		iounmap(timer_evt_capt_reg);

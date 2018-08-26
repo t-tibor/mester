@@ -1,4 +1,5 @@
-obj-m += ecap_if.o
+obj-m += ecap.o
+ecap-objs := ecap_if.o ../icap_channel/icap_channel.o
 
 KDIR := "/home/tibi/dipterv/bb-kernel-torvalds/KERNEL"
 

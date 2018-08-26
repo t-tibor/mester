@@ -245,7 +245,7 @@ static irqreturn_t timer_irq_handler(int irq, void *data)
 	}
 
 		// clear interrupt flag
-	readl(irq_status,timer->io_base + TIMER_IRQSTATUS_OFFSET);
+	writel(irq_status,timer->io_base + TIMER_IRQSTATUS_OFFSET);
 
 	return IRQ_HANDLED;
 }
@@ -323,8 +323,8 @@ static int timer_probe(struct platform_device *pdev)
 		return -ENODEV;
 	}
 
-	timer->icap_channel_name = devm_kasprintf(&pdev->dev, GFP_KERNEL, "%s%d_icap",dev_name(&pdev->dev),timer_idx);
-	timer->icap = icap_create_channel(timer->icap_channel_name,10);
+	timer->icap_channel_name = devm_kasprintf(&pdev->dev, GFP_KERNEL, "%s%d_icap","dmtimer",timer_idx);
+	timer->icap = icap_create_channel(timer->icap_channel_name,13);
 	if(!timer->icap)
 	{
 		dev_err(&pdev->dev,"Cannot initialize icap channel: /dev/%s.\n",timer->misc.name);
@@ -366,7 +366,7 @@ static int timer_probe(struct platform_device *pdev)
 static int timer_remove(struct platform_device *pdev)
 {
 	struct DMTimer_priv *timer;
-	priv = platform_get_drvdata(pdev);
+	timer = platform_get_drvdata(pdev);
 
 	// stop the timer interface clock
 	pm_runtime_put_sync(&pdev->dev);

@@ -1,0 +1,19 @@
+#!/bin/bash
+
+if [[ $UID -ne 0 ]]; then
+	echo "Run with root rivilege."
+fi
+
+echo "48046000.timer" > /sys/bus/platform/drivers/omap_timer/unbind
+echo "48048000.timer" > /sys/bus/platform/drivers/omap_timer/unbind
+echo "4804a000.timer" > /sys/bus/platform/drivers/omap_timer/unbind
+echo "48046000.timer" > /sys/bus/platform/drivers/RTIO_DMTimer/bind
+echo "48048000.timer" > /sys/bus/platform/drivers/RTIO_DMTimer/bind
+echo "4804a000.timer" > /sys/bus/platform/drivers/RTIO_DMTimer/bind
+
+echo "48300100.ecap" > /sys/bus/platform/drivers/ecap/unbind
+echo "48302100.ecap" > /sys/bus/platform/drivers/ecap/unbind
+echo "48304100.ecap" > /sys/bus/platform/drivers/ecap/unbind
+echo "48300100.ecap" > /sys/bus/platform/drivers/RTIO_ECAP/bind
+echo "48302100.ecap" > /sys/bus/platform/drivers/RTIO_ECAP/bind
+echo "48304100.ecap" > /sys/bus/platform/drivers/RTIO_ECAP/bind

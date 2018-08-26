@@ -184,7 +184,6 @@ static irqreturn_t ecap_irq_handler(int irq, void *data)
 	struct ecap_priv *ecap= (struct ecap_priv*)data;
 	// clear interrupt line and save the input capture flag
 	u8 irq_status;
-	u32 ts;
 
 	irq_status = readb(ecap->io_base + ECAP_ECFLG);
 
@@ -214,7 +213,7 @@ static irqreturn_t ecap_irq_handler(int irq, void *data)
 					irq_status & ECAP_ECFLG_CNTOVF);
 
 	if(irq_status & ECAP_ECFLG_CNTOVF)
-		icap_signal_ecap_ovf(ecap->icap);
+		icap_signal_timer_ovf(ecap->icap);
 	
 	
 	// clear interrupt flag
@@ -242,6 +241,16 @@ static int ecap_probe(struct platform_device *pdev)
 		return -EINVAL;
 	}
 
+	// alloc private descriptor struct
+	ecap = devm_kzalloc(&pdev->dev,sizeof(struct ecap_priv),GFP_KERNEL);
+	if(!ecap)
+	{
+		dev_err(&pdev->dev,"%s:%d: Cannot allocate memory.\n",__func__,__LINE__);
+		return -ENOMEM;
+	}
+	ecap->pdev = pdev;
+	ecap->idx = ecap_idx;
+	ecap->name = devm_kasprintf(&pdev->dev, GFP_KERNEL, "ecap%d",ecap_idx);
 
 	// ecap is valid, so lets get its resources
 	irq = platform_get_resource(pdev,IORESOURCE_IRQ,0);
@@ -256,17 +265,6 @@ static int ecap_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev,"%s:%d: Cannot get ecap memory.\n",__func__,__LINE__);
 		return -ENODEV;
 	}
-
-	// alloc private descriptor struct
-	ecap = devm_kzalloc(&pdev->dev,sizeof(struct ecap_priv),GFP_KERNEL);
-	if(!ecap)
-	{
-		dev_err(&pdev->dev,"%s:%d: Cannot allocate memory.\n",__func__,__LINE__);
-		return -ENOMEM;
-	}
-	ecap->pdev = pdev;
-	ecap->idx = ecap_idx;
-	ecap->name = devm_kasprintf(&pdev->dev, GFP_KERNEL, "ecap%d",ecap_idx);
 
 	// remapping registers
 	ecap->io_base =  devm_ioremap_resource(&pdev->dev, mem);
@@ -296,8 +294,8 @@ static int ecap_probe(struct platform_device *pdev)
 		return -ENODEV;
 	}
 
-	ecap->icap_channel_name = devm_kasprintf(&pdev->dev, GFP_KERNEL, "%s%d_icap",dev_name(&pdev->dev),ecap_idx);
-	ecap->icap = icap_create_channel(ecap->icap_channel_name,10);
+	ecap->icap_channel_name = devm_kasprintf(&pdev->dev, GFP_KERNEL, "%s%d_icap","ecap",ecap_idx);
+	ecap->icap = icap_create_channel(ecap->icap_channel_name,13);
 	if(!ecap->icap)
 	{
 		dev_err(&pdev->dev,"Cannot initialize icap channel: /dev/%s.\n",ecap->misc.name);
@@ -339,7 +337,7 @@ static int ecap_probe(struct platform_device *pdev)
 static int ecap_remove(struct platform_device *pdev)
 {
 	struct ecap_priv *ecap;
-	priv = platform_get_drvdata(pdev);
+	ecap = platform_get_drvdata(pdev);
 
 	// stop the ecap interface clock
 	pm_runtime_put_sync(&pdev->dev);

@@ -7,7 +7,6 @@
 #include <linux/mutex.h>
 #include <linux/kfifo.h>
 #include <linux/spinlock.h>
-#include <linux/workqueue.h>
 #include <linux/interrupt.h>
 
 #include <linux/miscdevice.h>
@@ -35,7 +34,7 @@ struct icap_channel{
 	struct spinlock param_lock;
 	int buffer_overflow;
 	u64 ts_upper_bits;
-	u64 ts_mask;
+	u32 ts_mask;
 	u8 ts_store_state;
 
 	// interrupt bottom half
@@ -59,7 +58,7 @@ int icap_add_ts(struct icap_channel *icap, u32 ts, int ovf);
 void icap_signal_timer_ovf(struct icap_channel *icap);
 
 // consumer interface
-u32 icap_ts_count(struct icap_channel *icap);
+u32 icap_get_ts_count(struct icap_channel *icap);
 
 
-#endif __ICAP_CHANNEL_H
+#endif //__ICAP_CHANNEL_H
