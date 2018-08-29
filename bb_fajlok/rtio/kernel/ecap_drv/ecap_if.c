@@ -139,16 +139,24 @@ static int ecap_cdev_mmap(struct file *filep, struct vm_area_struct *vma)
 	return 0;
 }
 
-#define IOCTL_SET_CLOCK_STATE	0x20
-#define IOCTL_SET_CLOCK_SOURCE 	0x21
+#define ECAP_IOCTL_MAGIC	'-'
 
-#define IOCTL_SET_ICAP_SOURCE	0x30
+#define IOCTL_SET_CLOCK_STATE		_IO(TIMER_IOCTL_MAGIC,1)
+// ECAP_SET_CLOCK_SOURCE 	is not implemented
+#define IOCTL_SET_ICAP_SOURCE 		_IO(TIMER_IOCTL_MAGIC,3)
+
+#define ECAP_IOCTL_MAX				3
+
+
 
 static long ecap_cdev_ioctl(struct file *pfile, unsigned int cmd, unsigned long arg)
 {
 	struct miscdevice *misc_dev = (struct miscdevice*) (pfile->private_data);
 	struct ecap_priv *ecap = container_of(misc_dev, struct ecap_priv, misc);
 	int ret = 0;
+
+	if (_IOC_TYPE(cmd) != ECAP_IOCTL_MAGIC) return -ENOTTY;
+	if (_IOC_NR(cmd) > ECAP_IOCTL_MAX) return -ENOTTY;
 
 	switch(cmd)
 	{

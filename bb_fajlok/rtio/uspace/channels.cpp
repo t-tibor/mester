@@ -34,26 +34,16 @@ struct timekeeper
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
+#include "channel.h"
 
-struct icap_source
-{
-	int (ts_getter*)(uint64_t *buffer, uint32_t size void* arg);
-	int (ovf_getter*)(void *arg);
-	void *arg;
-}
 
-int icap_get_ts(struct icap_source *icap, uint64_t *buffer, uint32_t size)
+icap_source::icap_source()
 {
-	return icap->ts_getter(buffer,size, icap->arg);
+	this->offset = 0;
 }
 
 //<------------------- REAL HW SOURCE ------------------->
-struct hw_icap_src
-{
-	struct icap_source icap;
-	char *fname;
-	int fileno;
-}
+
 
 int hw_icap_src_get_ts(uint64_t *buffer,uint32_t size, void *arg)
 {

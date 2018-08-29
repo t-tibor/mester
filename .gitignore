@@ -38,3 +38,6 @@
 *.cmd
 *.tmp_versions/
 *.o.d
+
+#device tree files
+*.dtbo
