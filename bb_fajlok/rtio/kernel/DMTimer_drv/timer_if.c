@@ -161,9 +161,15 @@ static int timer_cdev_close (struct inode *inode, struct file *pfile)
 }
 
 
+static const struct vm_operations_struct timer_physical_vm_ops = {
+#ifdef CONFIG_HAVE_IOREMAP_PROT
+	.access = generic_access_phys,
+#endif
+};
 
 static int timer_cdev_mmap(struct file *filep, struct vm_area_struct *vma)
 {
+	int ret;
 	struct miscdevice *misc_dev = (struct miscdevice*) (filep->private_data);
 	struct DMTimer_priv *timer= container_of(misc_dev, struct DMTimer_priv, misc);
 
@@ -173,9 +179,20 @@ static int timer_cdev_mmap(struct file *filep, struct vm_area_struct *vma)
 	unsigned long psize = timer->regspace_size;
 
 	if (vsize > psize)
-	    return -EINVAL; /*  spans too high */
+	{
+		dev_warn(&timer->pdev->dev,"[%s:%d] Requested memoryregion is too big. (0x%lx) Size of the remapped memory region: 0x%lx\n",__FUNCTION__,__LINE__,vsize,psize);
+	}
 
-	remap_pfn_range(vma, vma->vm_start, physical, vsize, vma->vm_page_prot);
+
+	vma->vm_ops = &timer_physical_vm_ops;
+	vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
+
+	ret = remap_pfn_range(vma, vma->vm_start, physical >> PAGE_SHIFT, psize, vma->vm_page_prot);
+	if(ret)
+	{
+		dev_warn(&timer->pdev->dev,"[%s:%d] Cannot remap memory region. ret:%d, phys:0x%lx\n",__FUNCTION__,__LINE__,ret,physical);
+		return -EAGAIN;
+	}
 	return 0;
 }
 
@@ -185,8 +202,9 @@ static int timer_cdev_mmap(struct file *filep, struct vm_area_struct *vma)
 #define IOCTL_SET_CLOCK_STATE		_IO(TIMER_IOCTL_MAGIC,1)
 #define IOCTL_SET_CLOCK_SOURCE 		_IO(TIMER_IOCTL_MAGIC,2)
 #define IOCTL_SET_ICAP_SOURCE 		_IO(TIMER_IOCTL_MAGIC,3)
+#define IOCTL_GET_CLK_FREQ			_IO(TIMER_IOCTL_MAGIC,4)
 
-#define TIMER_IOCTL_MAX				3
+#define TIMER_IOCTL_MAX				4
 
 
 static long timer_cdev_ioctl(struct file *pfile, unsigned int cmd, unsigned long arg)
@@ -209,6 +227,9 @@ static long timer_cdev_ioctl(struct file *pfile, unsigned int cmd, unsigned long
 			
 		case IOCTL_SET_ICAP_SOURCE:
 			ret = event_mux_set_dmtimer_event(timer->idx,arg);
+			break;
+		case IOCTL_GET_CLK_FREQ:
+			ret = clk_get_rate(timer->fclk);
 			break;
 		default:
 			dev_err(&timer->pdev->dev,"Invalid IOCTL command : %d.\n",cmd);
@@ -324,6 +345,7 @@ static int timer_probe(struct platform_device *pdev)
  	timer->misc.fops = &timer_cdev_fops;
 	timer->misc.minor = MISC_DYNAMIC_MINOR;
 	timer->misc.name =timer->name;
+	timer->misc.mode = S_IRUGO | S_IWUGO;
 	if(misc_register(&timer->misc))
 	{
 		dev_err(&pdev->dev,"Couldn't initialize miscdevice /dev/%s.\n",timer->misc.name);

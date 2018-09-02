@@ -49,7 +49,7 @@
 	#define ECAP_ECFLG_CNTOVF			(1<<5)
 #define ECAP_ECCLR					0x30
 #define ECAP_ECFRC					0x32
-
+#define ECAP_REVID					0x5C
 
 /*
 TODO:
@@ -121,9 +121,15 @@ static int ecap_cdev_close (struct inode *inode, struct file *pfile)
 }
 
 
+static const struct vm_operations_struct ecap_physical_vm_ops = {
+#ifdef CONFIG_HAVE_IOREMAP_PROT
+	.access = generic_access_phys,
+#endif
+};
 
 static int ecap_cdev_mmap(struct file *filep, struct vm_area_struct *vma)
 {
+	int ret;
 	struct miscdevice *misc_dev = (struct miscdevice*) (filep->private_data);
 	struct ecap_priv *ecap= container_of(misc_dev, struct ecap_priv, misc);
 
@@ -133,19 +139,30 @@ static int ecap_cdev_mmap(struct file *filep, struct vm_area_struct *vma)
 	unsigned long psize = ecap->regspace_size;
 
 	if (vsize > psize)
-	    return -EINVAL; /*  spans too high */
+	{
+		dev_warn(&ecap->pdev->dev,"[%s:%d] Requested memoryregion is too big. (0x%lx) Size of the remapped memory region: 0x%lx\n",__FUNCTION__,__LINE__,vsize,psize);
+	}
 
-	remap_pfn_range(vma, vma->vm_start, physical, vsize, vma->vm_page_prot);
+	vma->vm_ops = &ecap_physical_vm_ops;
+	vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
+
+	ret = remap_pfn_range(vma, vma->vm_start, physical >> PAGE_SHIFT, psize, vma->vm_page_prot);
+	if(ret)
+	{
+		dev_warn(&ecap->pdev->dev,"[%s:%d] Cannot remap memory region. ret:%d, phys:0x%lx\n",__FUNCTION__,__LINE__,ret,physical);
+		return -EAGAIN;
+	}
 	return 0;
 }
 
-#define ECAP_IOCTL_MAGIC	'-'
+#define TIMER_IOCTL_MAGIC	'-'
 
 #define IOCTL_SET_CLOCK_STATE		_IO(TIMER_IOCTL_MAGIC,1)
 // ECAP_SET_CLOCK_SOURCE 	is not implemented
 #define IOCTL_SET_ICAP_SOURCE 		_IO(TIMER_IOCTL_MAGIC,3)
+#define IOCTL_GET_CLK_FREQ			_IO(TIMER_IOCTL_MAGIC,4)
 
-#define ECAP_IOCTL_MAX				3
+#define ECAP_IOCTL_MAX				4
 
 
 
@@ -155,7 +172,7 @@ static long ecap_cdev_ioctl(struct file *pfile, unsigned int cmd, unsigned long 
 	struct ecap_priv *ecap = container_of(misc_dev, struct ecap_priv, misc);
 	int ret = 0;
 
-	if (_IOC_TYPE(cmd) != ECAP_IOCTL_MAGIC) return -ENOTTY;
+	if (_IOC_TYPE(cmd) != TIMER_IOCTL_MAGIC) return -ENOTTY;
 	if (_IOC_NR(cmd) > ECAP_IOCTL_MAX) return -ENOTTY;
 
 	switch(cmd)
@@ -167,7 +184,9 @@ static long ecap_cdev_ioctl(struct file *pfile, unsigned int cmd, unsigned long 
 		case IOCTL_SET_ICAP_SOURCE:
 			ret = event_mux_set_ecap_event(ecap->idx,arg);
 			break;
-
+		case IOCTL_GET_CLK_FREQ:
+			ret = clk_get_rate(ecap->fclk);
+			break;
 		default:
 			dev_err(&ecap->pdev->dev,"Invalid IOCTL command : %d.\n",cmd);
 			ret = -ENOTTY;
@@ -191,9 +210,10 @@ static irqreturn_t ecap_irq_handler(int irq, void *data)
 {
 	struct ecap_priv *ecap= (struct ecap_priv*)data;
 	// clear interrupt line and save the input capture flag
-	u8 irq_status;
+	u16 irq_status;
 
-	irq_status = readb(ecap->io_base + ECAP_ECFLG);
+
+	irq_status = readw(ecap->io_base + ECAP_ECFLG);
 
 	// the CAP1-CAP4 registers are used as fifo,
 	// all data are sent to the same channel
@@ -225,7 +245,8 @@ static irqreturn_t ecap_irq_handler(int irq, void *data)
 	
 	
 	// clear interrupt flag
-	writeb(irq_status,ecap->io_base + ECAP_ECCLR);
+	writew(irq_status,ecap->io_base + ECAP_ECCLR);
+
 
 	return IRQ_HANDLED;
 }
@@ -296,6 +317,7 @@ static int ecap_probe(struct platform_device *pdev)
  	ecap->misc.fops = &ecap_cdev_fops;
 	ecap->misc.minor = MISC_DYNAMIC_MINOR;
 	ecap->misc.name =ecap->name;
+	ecap->misc.mode = S_IRUGO | S_IWUGO;
 	if(misc_register(&ecap->misc))
 	{
 		dev_err(&pdev->dev,"Couldn't initialize miscdevice /dev/%s.\n",ecap->misc.name);
@@ -337,6 +359,7 @@ static int ecap_probe(struct platform_device *pdev)
  	{
  		dev_err(&pdev->dev,"[%s:%d] Cannot resume the ecap.\n",__FUNCTION__,__LINE__);
  	}
+
 
  	return 0;
 

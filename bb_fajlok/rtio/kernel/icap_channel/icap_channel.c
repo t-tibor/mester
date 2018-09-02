@@ -75,6 +75,7 @@ struct icap_channel * icap_create_channel(const char *name, u32 log_buf_size)
  	icap->misc.fops = &icap_cdev_fops;
 	icap->misc.minor = MISC_DYNAMIC_MINOR;
 	icap->misc.name =icap->name;
+	icap->misc.mode = S_IRUGO | S_IWUGO;
 	if(misc_register(&icap->misc))
 	{
 		pr_err("Couldn't initialize miscdevice /dev/%s.\n",icap->misc.name);
@@ -316,7 +317,7 @@ static ssize_t icap_cdev_read (struct file *pfile, char __user *buff, size_t len
 
 		if(eof) return 0;
 
-		if(wait_event_interruptible(icap->rq,((icap_get_ts_count(icap) == 0) && (icap_channel_is_ts_store_enabled(icap))) ))
+		if(wait_event_interruptible(icap->rq,((icap_get_ts_count(icap) > 0) || !(icap_channel_is_ts_store_enabled(icap))) ))
 			return -ERESTARTSYS;
 
 		if(mutex_lock_interruptible(&icap->channel_lock))

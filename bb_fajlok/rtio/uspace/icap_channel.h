@@ -38,36 +38,44 @@
 #define TIMER_TCAR2_OFFSET			0x58
 
 // ecap registers
-#define ECAP_TSCTR		0x00
-#define ECAP_CTRPHS		0x04
-#define ECAP_CAP1		0x08
-#define ECAP_CAP2		0x0c
-#define ECAP_CAP3		0x10
-#define ECAP_CAP4		0x14
-#define ECAP_ECCTL1		0x28
+#define ECAP_BASE		0X100
+
+#define ECAP_TSCTR		ECAP_BASE+0x00
+#define ECAP_CTRPHS		ECAP_BASE+0x04
+#define ECAP_CAP1		ECAP_BASE+0x08
+#define ECAP_CAP2		ECAP_BASE+0x0c
+#define ECAP_CAP3		ECAP_BASE+0x10
+#define ECAP_CAP4		ECAP_BASE+0x14
+#define ECAP_ECCTL1		ECAP_BASE+0x28
 #define  	ECCTL1_PRESCALE_OFFSET		9
 #define 	ECCTL1_CAPLDEN				(1<<8)
-#define ECAP_ECCTL2		0x2A
+#define ECAP_ECCTL2		ECAP_BASE+0x2A
 #define		ECCTL2_CONT_ONESHT			(1<<0)
 #define 	ECCTL2_STOP_WRAP_OFFSET		1
 #define		ECCTL2_RE_ARM				(1<<3)
 #define 	ECCTL2_TSCTRSTOP			(1<<4)
-#define ECAP_ECEINT		0x2C
-#define ECAP_ECFLG		0x2E
-#define ECAP_ECCLR		0x30
-#define ECAP_ECFRC		0x32
-#define ECAP_REVID		0x5C
+#define ECAP_ECEINT		ECAP_BASE+0x2C
+#define 	ECEINT_CNTOVF				(1<<5)
+#define 	ECEINT_CEVT4				(1<<4)
+#define 	ECEINT_CEVT3				(1<<3)
+#define 	ECEINT_CEVT2				(1<<2)
+#define 	ECEINT_CEVT1				(1<<1)
+#define ECAP_ECFLG		ECAP_BASE+0x2E
+#define ECAP_ECCLR		ECAP_BASE+0x30
+#define ECAP_ECFRC		ECAP_BASE+0x32
+#define ECAP_REVID		ECAP_BASE+0x5C
 
 
 // timer ioctl operations
 #define TIMER_IOCTL_MAGIC	'-'
-#define TIMER_IOCTL_SET_CLOCK_STATE		_IO(DMTIMER_IOCTL_MAGIC,1)
+#define TIMER_IOCTL_SET_CLOCK_STATE		_IO(TIMER_IOCTL_MAGIC,1)
 	#define TIMER_CLK_DISABLE		0x00
 	#define TIMER_CLK_ENABLE		0x01
-#define TIMER_IOCTL_SET_CLOCK_SOURCE 		_IO(DMTIMER_IOCTL_MAGIC,2) // not implented for ecap timers
+#define TIMER_IOCTL_SET_CLOCK_SOURCE 		_IO(TIMER_IOCTL_MAGIC,2) // not implented for ecap timers
 	#define TIMER_CLOCK_SOURCE_SYSCLK		0x01
 	#define	TIMER_CLOCK_SOURCE_TCLKIN		0x02
-#define TIMER_IOCTL_SET_ICAP_SOURCE 		_IO(DMTIMER_IOCTL_MAGIC,3)
+#define TIMER_IOCTL_SET_ICAP_SOURCE 		_IO(TIMER_IOCTL_MAGIC,3)
+#define TIMER_IOCTL_GET_CLK_FREQ			_IO(TIMER_IOCTL_MAGIC,4)
 
 
 // input capture channel ioctl operations

@@ -1,0 +1,99 @@
+#!/bin/bash
+
+alias dm="busybox devmem"
+
+
+rd () {
+	busybox devmem `printf "0x%X" $(( $1 + $2 ))`
+}
+
+wr (){
+	busybox devmem `printf "0x%X" $(( $1 +  $2 ))` 32  $3
+}
+
+#Timers
+TIMER5_BASE="0x48046000"
+TIMER6_BASE="0x48048000"
+TIMER7_BASE="0x4804A000"
+
+TIM_REG_NAME=("TIDR" "TIOCP_CFG" "IRQ_RAW" "IRQSTATUS" "TCLR" "TCRR" "TLDR" "TTGR" "TMAR" "TCAR1" "TSICR" "TCAR2")
+TIM_REG_OFFSET=(0 0x10 0x24 0x28 0x38 0x3c 0x40 0x44 0x4c 0x50 0x54 0x58 )
+VALID_IDX="0 1 2 3 4 5 6 7 8 9 10 11"
+
+dump_timer6 () {
+	for idx in $VALID_IDX
+	do
+		offset=${TIM_REG_OFFSET[idx]}
+		printf "0x%X - \t%s\t - \t " $(( $TIMER6_BASE + $offset )) ${TIM_REG_NAME[idx]}
+		rd $TIMER6_BASE $offset
+	done
+}
+dump_timer5 () {
+	for idx in $VALID_IDX
+	do
+		offset=${TIM_REG_OFFSET[idx]}
+		printf "0x%X - \t%s\t - \t " $(( $TIMER5_BASE + $offset )) ${TIM_REG_NAME[idx]}
+		rd $TIMER6_BASE $offset
+	done
+}
+
+dump_timer() {
+	echo "Dumping dmtimer$1"
+	BASE=$((TIMER$1_BASE))
+	for idx in $VALID_IDX
+	do
+		offset=${TIM_REG_OFFSET[idx]}
+		printf "0x%X - \t%s\t - \t " $(( $BASE + $offset )) ${TIM_REG_NAME[idx]}
+		rd $BASE $offset
+	done
+}
+
+# ECAP
+ECAP0_BASE="0x48300100"
+ECAP1_BASE="0x48302100"
+ECAP2_BASE="0x48304100"
+
+ECAP_REG_NAME=("TSCTR" "CTRPHS" "CAP1" "CAP2" "CAP3" 	"CAP4" "ECCTL1" "ECCTL2" "ECEINT" "ECFLG" "ECCLR" "ECFRC" "REVID")
+ECAP_REG_OFFSET=(0 		0x04 	0x08 	 0xc 	0x10 	0x14     0x28    0x2a     0x2c     0x2e    0x30    0x32    0x5c)
+ECAP_VALID_IDX="0 1 2 3 4 5 6 7 8 9 10 11 12"
+
+dump_ecap() {
+	echo "Dumping ecap$1"
+	BASE=$((ECAP$1_BASE))
+	for idx in $ECAP_VALID_IDX
+	do
+		offset=${ECAP_REG_OFFSET[idx]}
+		printf "0x%X - \t%s\t - \t " $(( $BASE + $offset )) ${ECAP_REG_NAME[idx]}
+		rd $BASE $offset
+	done
+}
+
+
+
+if [[ $1 == "all" ]];then
+	dump_ecap 0
+	dump_ecap 1
+	dump_ecap 2
+	dump_timer 5
+	dump_timer 6
+	dump_timer 7
+	exit
+fi
+
+for idx in "$@"
+do
+	case $idx in
+	[0-2])
+		dump_ecap $idx
+		;;
+	[5-7])
+		dump_timer $idx
+		;;
+	*)
+		echo "Invalid timer index $1"
+		;;
+	esac
+done
+
+
+
