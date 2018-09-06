@@ -10,7 +10,7 @@
 #include "./servo/pi.h"
 
 #define DATA_IN_FILE "log.txt"
-#define DATA_OUT_FILE "../meas/servo.txt"
+#define DATA_OUT_BASE  "../meas/"
 
 uint64_t *ptp;
 uint64_t *hw;
@@ -78,10 +78,11 @@ int load_data()
 	return idx;
 }
 
-int export_data(uint64_t* ptp, uint64_t* hw, uint64_t* est, int dataCnt)
+
+int export_data(char * fname, uint64_t* ptp, uint64_t* hw, uint64_t* est, int dataCnt)
 {
 	FILE *f;
-	f = fopen(DATA_OUT_FILE,"w");
+	f = fopen(fname,"w");
 	if(!f)
 		return -1;
 
@@ -95,7 +96,64 @@ int export_data(uint64_t* ptp, uint64_t* hw, uint64_t* est, int dataCnt)
 }
 
 
-int main()
+int read_offset(int argc, char ** argv)
+{
+	char *time;
+	int len;
+	char suffix;
+	uint64_t mult;
+	uint64_t offset;
+	int ret;
+
+	if(argc < 2) return -1;
+
+	time = argv[1];
+	len = strlen(time);
+	if(len < 2) return -1;
+
+	//last char is suffix
+	suffix = time[len-1];
+	switch(suffix)
+	{
+		case 'n':
+			mult = 1;
+			break;
+		case 'u':
+			mult = 1e3;
+			break;
+		case 'm':
+			mult = 1e6;
+			break;
+		default:
+			mult = 1e9;
+		break;	
+	}
+
+	ret = sscanf(time,"%"SCNu64,&offset);
+	if(ret != 1)
+		return -1;
+
+	offset *= mult;
+
+	return offset;
+}
+
+void gen_fout_name(char *buffer, uint64_t offset)
+{
+	char  suffexes[3] = {'n','u','m'};
+	int s = 0;
+
+	while(offset > 1000 && (offset%1000 == 0) && s < 2)
+	{
+		offset /= 1000;
+		s++;
+	}
+
+
+	sprintf(buffer, DATA_OUT_BASE "servo_delayed_%" PRIu64 "%cs.txt",offset,suffexes[s]);
+}
+
+int main(int argc, char **argv)
 {
 	int ret;
 	char c;
@@ -110,7 +168,18 @@ int main()
 	int64_t offset;
 	struct servo *s;
 	enum servo_state state ;
+	uint64_t servo_sync_offset;
+	char fout[256];
 
+// read controller offset from command line
+	servo_sync_offset = read_offset(argc, argv);
+	if(servo_sync_offset == -1)
+	{
+		printf("Invalid offset.\n");
+		return -1;
+	}
+	gen_fout_name(fout,servo_sync_offset);
+	printf("Applying servo offset: %" PRIu64 "ns\n",servo_sync_offset);
 
 // load data
 	dataCnt = load_data();
@@ -131,25 +200,44 @@ int main()
 	servo_sync_interval(s,tmp);
 
 
+	uint64_t	T_sync;
+	uint64_t t_sync;
+
 	T_prev = 0;
 	t_prev = 0;
 	dev = 0;
 	c = 0;
 	run = 0;
+
+
+	T_sync = 0;
+	t_sync = servo_sync_offset;
+
 	for(int i=0;i<dataCnt;i++)
 	{
 		t_next = hw[i];
+
+		T_next = T_sync + (t_next - t_sync)*(1+ dev*1e-9);
+		T_next_master = ptp[i];
+		offset = ((int64_t)T_next - (int64_t)T_next_master);
+		T_sync = T_sync + (t_next + servo_sync_offset - t_sync) * (1+dev*1e-9);
+		t_sync = t_next + servo_sync_offset;
+
+/*
 		// estimated global time for the next sync point
 		T_next = T_prev + (t_next - t_prev)*(1+dev*1e-9);
 		// measured global time for the next sync point
 		T_next_master = ptp[i];
-
 		offset = ((int64_t)T_next - (int64_t)T_next_master);
+*/
+
 
 		adj = servo_sample(s,offset,T_next,1,&state);
 
 		if(i==5)
 			servo_reset(s);
+
+		if(!run)  printf("\t T_master: %lu, T_est: %lu, offset: %ld, adj: %lf, dev: %lf\n",T_next_master,T_next,offset,adj,dev);
 
 		switch (state) {
 		case SERVO_UNLOCKED:
@@ -158,7 +246,7 @@ int main()
 		case SERVO_JUMP:
 		if(!run)  printf("State: JUMP");
 			dev = -adj;
-			T_next -= offset;
+			T_sync -= offset;
 			break;
 		case SERVO_LOCKED:
 		if(!run)  printf("State: LOCKED");
@@ -166,7 +254,7 @@ int main()
 			break;
 		}
 
-		if(!run)  printf("\t T_master: %lu, T_est: %lu, offset: %ld, adj: %lf, dev: %lf\n",T_next_master,T_next,offset,adj,dev);
+		
 
 		// save current timestamps
 		est[i] = T_next;
@@ -183,10 +271,16 @@ int main()
 
 	}
 
+
 // save data
-	ret = export_data(ptp,hw,est,dataCnt);
+	ret = export_data(fout, ptp,hw,est,dataCnt);
 	if(ret)
+	{
 		fprintf(stderr,"Cannot save data.\n");
+		return -1;
+	}
+
+	printf("Output data saved to file: %s\n",fout);
 
 	return 0;
 
