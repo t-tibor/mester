@@ -11,8 +11,11 @@
 #include <errno.h>
 #include <string.h>
 #include <signal.h>
+#include <inttypes.h>
 
+#include <pthread.h>
 
+#include "timekeeper.h"
 #include "icap_channel.h"
 #include "gpio.h"
 
@@ -177,7 +180,7 @@ int read_channel_raw(struct icap_channel *c, uint64_t *buf, unsigned len)
 
 int channel_do_conversion(struct icap_channel *c, uint64_t *buf, unsigned len)
 {
-	for(int i=0;i<len;i++)
+	for(unsigned i=0;i<len;i++)
 	{
 		buf[i] += c->offset;
 		buf[i] *= c->mult;
@@ -332,6 +335,8 @@ struct dmtimer dmt[DMTIMER_CNT] = {
 		.pin_dir = 1
 	}
 };
+
+struct dmtimer *trigger_timer = &dmt[0];
 
 #define ECAP_CNT 3
 struct ecap_timer ecap[ECAP_CNT] = {
@@ -682,9 +687,86 @@ int ptp_get_ts(struct timespec *ts)
 }
 
 
+int quit = 0;
+
+struct timekeeper *tk;
+// workers
+
+void *timekeeper_worker(void *arg)
+{
+	struct timekeeper *tk = (struct timekeeper*)arg;
+	uint64_t next_ts, ts_period;
+	struct timespec tspec;
+	uint64_t ptp_ts;
+	uint64_t hwts;
 
 
-volatile int quit = 0;
+	if(ptp_open())
+	{
+		fprintf(stderr,"Cannot open PTP device.\n");
+		return NULL;
+	}
+	ptp_disable_hwts();
+
+	next_ts = ts_period = (0xFFFFFFFF - trigger_timer->load)+1;
+
+
+	// enable timer HW_TS push events
+	ptp_enable_hwts();
+
+	while(!quit)
+	{
+		// calc hwts times from timer 5 settings
+		ptp_get_ts(&tspec);
+		ptp_ts = ((uint64_t)tspec.tv_sec*1000000000ULL)+tspec.tv_nsec;
+		hwts = next_ts;
+		channel_do_conversion(&trigger_timer->channel,&hwts,1);
+
+		// send the new timestamp to the timekeeper
+		timekeeper_add_sync_point(tk, hwts, ptp_ts);
+
+		next_ts += ts_period;
+	}
+
+	ptp_disable_hwts();
+	ptp_close();
+
+	return NULL;
+}
+
+
+void *channel_logger(void *arg)
+{
+	struct icap_channel *ch = (struct icap_channel*)arg;
+	int channel_idx = ch->idx;
+	FILE *f;
+	char fname[256];
+	uint64_t ts[16], ts2[16];
+	int rcvCnt;
+
+	sprintf(fname,"./icap_channel_%d.log",channel_idx);
+	f = fopen(fname,"w");
+	if(!f)
+	{
+		fprintf(stderr,"Cannot open channel log: %s\n",fname);
+		return NULL;
+	}
+
+	while(!quit)
+	{
+		rcvCnt = read_channel(ch,ts,16);
+		memcpy(ts,ts2,sizeof(uint64_t) *16);
+		timekeeper_convert(tk,ts,rcvCnt);
+		for(int i=0;i<rcvCnt;i++)
+			fprintf(f,"%" PRIu64 "%" PRIu64 "\n",ts2[i],ts[i]);
+	}
+
+	
+	fclose(f);
+	return NULL;	
+}
+
+
 
 void signal_handler(int sig)
 {
@@ -694,36 +776,55 @@ void signal_handler(int sig)
 
 
 #define CHANNEL_NUM 6
+#define SYNC_OFFSET 1000000 // 1ms
+#define TIMEKEEPER_LOG_NAME	"./timekeeper.log"
 
-
-uint64_t next_ts = 	0;
-uint64_t ts_period = 0;
 
 int main()
 {
 	int err = 0;
+	pthread_t timkeeper_thread_id;
+	pthread_t channel_log_thread_id;
+
 	uint64_t ts[CHANNEL_NUM];
+	uint64_t trigger_period;
 
 
+	// install signal handler for exit handling
 	signal(SIGINT, signal_handler);
 
-	// open ptp channels
-	err = ptp_open();
-	ptp_disable_hwts();
+
+	// create timekeeper
+	trigger_period = (0xFFFFFFFF - trigger_timer->load)+1;
+	tk = timekeeper_create(0,trigger_period, SYNC_OFFSET, TIMEKEEPER_LOG_NAME);
+	if(!tk)
+	{
+		fprintf(stderr,"Cannot create timekeeper.\n");
+		return -1;
+	}
 
 
 	// init timers
 	err = init_timers();
 	if(err)
 	{
-		ptp_close();
+		timekeeper_destroy(tk);
 		fprintf(stderr,"Cannot open hw timers. Exiting...");
 		return -1;
 	}
 
+	// start timekeeper worker
+	err = pthread_create(&timkeeper_thread_id, NULL, timekeeper_worker, (void*)tk);
+	if(err)
+	{
+		fprintf(stderr,"Cannot start the timekeeper worker.\n");
+		close_timers();
+		timekeeper_destroy(tk);
+		return -1;
+	}
 
 
-// Initial offset cancelations
+	// Initial offset cancelation
 	printf("Offset cancellation.\n");
 
 	for(int i=0;i<CHANNEL_NUM;i++)
@@ -750,50 +851,25 @@ int main()
 	}
 	printf("Offset cancellation ready.\n");
 
-	// calc hwts times from timer 5 settings
-	next_ts = ts_period = (0xFFFFFFFF - dmt[0].load)+1 ;
+
+	//change timer event source to input pins
+	for(int i=0;i<DMTIMER_CNT;i++)
+		timer_set_icap_source(&dmt[i].dev,0);
+	for(int i=0;i<ECAP_CNT;i++)
+		timer_set_icap_source(&ecap[i].dev,0);
 
 
-	ptp_enable_hwts();
+	// start channel loggers
+	err = pthread_create(&channel_log_thread_id, NULL, channel_logger, (void*)&dmt[0].channel);
+	if(err)
+		fprintf(stderr,"Cannot start the channel logger.\n");
 
-	// TODO change icap source back to normal.
-	printf("Waiting for capture events.\n");
-	struct timespec tspec, tspec_1;
-	double ptp_delta;
-	uint64_t ptp_ts;
-	uint64_t hwts;
 
-	tspec_1.tv_sec = tspec_1.tv_nsec = 0;
-	while(!quit)
-	{
-		ptp_get_ts(&tspec);
-		ptp_ts = tspec.tv_sec*1e9+tspec.tv_nsec;
-		hwts = next_ts;
-		channel_do_conversion(&dmt[0].channel,&hwts,1);
-
-		ptp_delta = tspec.tv_sec + tspec.tv_nsec*1e-9 - tspec_1.tv_sec - tspec_1.tv_nsec*1e-9;
-		printf("%lld, %lld\n",ptp_ts,hwts);
-
-		next_ts += ts_period;
-		tspec_1 = tspec;
-	}
-
-	while(!quit)
-	{
-		int rcv;
-		uint64_t ts[CHANNEL_NUM];
-
-		for(int i=0;i<CHANNEL_NUM;i++)
-		{
-			rcv = read_channel(channel_slot[i],&ts[i],1);
-			(void)rcv;
-
-			printf("Timestamp from dmtimer %d: %lld\tdelta: %lld\n",i,ts[i],ts[i] - ts[0]);
-		}
-	}
-
-	ptp_disable_hwts();
-	ptp_close();
+	// do the timekeeper work
+	timekeeper_worker((void*)tk);
+	
+	void *ret;
+	pthread_join(channel_log_thread_id,&ret);
 
 	close_timers();
 return 0;

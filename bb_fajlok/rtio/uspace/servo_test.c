@@ -9,8 +9,13 @@
 #include "./servo/servo.h"
 #include "./servo/pi.h"
 
-#define DATA_IN_FILE "log.txt"
+
+#include "timekeeper.h"
+
+#define DATA_IN_FILE "../meas/log.txt"
 #define DATA_OUT_BASE  "../meas/"
+
+#define TIMEKEEPER_LOG "../meas/tk_log.txt"
 
 uint64_t *ptp;
 uint64_t *hw;
@@ -143,7 +148,7 @@ void gen_fout_name(char *buffer, uint64_t offset)
 	char  suffexes[3] = {'n','u','m'};
 	int s = 0;
 
-	while(offset > 1000 && (offset%1000 == 0) && s < 2)
+	while(offset >= 1000 && (offset%1000 == 0) && s < 2)
 	{
 		offset /= 1000;
 		s++;
@@ -160,8 +165,8 @@ int main(int argc, char **argv)
 	int run;
 
 	uint64_t T_next_master;
-	uint64_t T_prev, T_next;
-	uint64_t t_prev, t_next;
+	uint64_t T_next;
+	uint64_t t_next;
 	int dataCnt;
 	double tmp;
 	double dev ,adj;
@@ -170,6 +175,7 @@ int main(int argc, char **argv)
 	enum servo_state state ;
 	uint64_t servo_sync_offset;
 	char fout[256];
+	double dt;
 
 // read controller offset from command line
 	servo_sync_offset = read_offset(argc, argv);
@@ -184,6 +190,7 @@ int main(int argc, char **argv)
 // load data
 	dataCnt = load_data();
 	est = (uint64_t*)malloc(dataCnt*sizeof(uint64_t));
+
 
 // Create servo
 	print_set_level(PRINT_LEVEL_MAX);
@@ -200,11 +207,12 @@ int main(int argc, char **argv)
 	servo_sync_interval(s,tmp);
 
 
+// Create timekeeper
+	struct timekeeper *tk = timekeeper_create(CLOCK_SERVO_PI,tmp, servo_sync_offset,TIMEKEEPER_LOG);
+// feed data into the servo
 	uint64_t	T_sync;
 	uint64_t t_sync;
 
-	T_prev = 0;
-	t_prev = 0;
 	dev = 0;
 	c = 0;
 	run = 0;
@@ -216,11 +224,19 @@ int main(int argc, char **argv)
 	for(int i=0;i<dataCnt;i++)
 	{
 		t_next = hw[i];
-
-		T_next = T_sync + (t_next - t_sync)*(1+ dev*1e-9);
 		T_next_master = ptp[i];
+
+		timekeeper_add_sync_point(tk, t_next, T_next_master);
+
+		dt = (double)(t_next - t_sync) * dev*1e-9;
+		T_next = T_sync + (t_next - t_sync);
+		T_next += (uint64_t)(dt);
+		
 		offset = ((int64_t)T_next - (int64_t)T_next_master);
-		T_sync = T_sync + (t_next + servo_sync_offset - t_sync) * (1+dev*1e-9);
+
+		dt = ((double)(t_next + servo_sync_offset - t_sync)) * dev * 1e-9;
+		T_sync +=(t_next + servo_sync_offset - t_sync);
+		T_sync += (uint64_t)(dt);
 		t_sync = t_next + servo_sync_offset;
 
 /*
@@ -234,8 +250,6 @@ int main(int argc, char **argv)
 
 		adj = servo_sample(s,offset,T_next,1,&state);
 
-		if(i==5)
-			servo_reset(s);
 
 		if(!run)  printf("\t T_master: %lu, T_est: %lu, offset: %ld, adj: %lf, dev: %lf\n",T_next_master,T_next,offset,adj,dev);
 
@@ -259,8 +273,6 @@ int main(int argc, char **argv)
 		// save current timestamps
 		est[i] = T_next;
 
-		T_prev = T_next;
-		t_prev = t_next;
 
 		if(!run) 
 		{
@@ -282,6 +294,31 @@ int main(int argc, char **argv)
 
 	printf("Output data saved to file: %s\n",fout);
 
+
+// run timekeeper covert test
+	uint64_t test_hw[100];
+	uint64_t test_glob[100];
+	unsigned idx = (tk->head-10) & (tk->sync_point_buffer_size-1);
+	for(int i=0;i<10;i++)
+	{
+		for(int j=0;j<10;j++)
+		{
+			test_hw[10*i+j] = tk->sync_points[idx].ptp_local + j * 20000000;
+			test_glob[10*i+j] = tk->sync_points[idx].ptp_local + j * 20000000;
+		}
+
+		idx = (idx + 1) & (tk->sync_point_buffer_size-1);
+	}
+
+	timekeeper_convert(tk,test_glob,100);
+
+	FILE * tk_test = fopen("../meas/tk_test.log","w");
+	for(int i=0;i<100;i++)
+		fprintf(tk_test,"%" PRIu64 " ,%"PRIu64"\n",test_hw[i],test_glob[i]);
+	fclose(tk_test);
+
+
+	timekeeper_destroy(tk);
 	return 0;
 
 }

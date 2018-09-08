@@ -3,7 +3,6 @@
 
 #include <sys/ioctl.h>
 
-
 // dmtimer registers
 #define DMTIMER_TIDR				0x00
 #define DMTIMER_TIOCP				0x10
