@@ -101,10 +101,10 @@ int timekeeper_convert(struct timekeeper *tk, uint64_t *local_ts, int ts_count)
 		sync_glob = tk->sync_points[idx].global_ts;
 		adj = tk->sync_points[idx].adj;
 
-		delta = local_ts[i] - sync_loc;
+		delta = (int64_t)(local_ts[i] - sync_loc);
 		dt = (double)(delta)*adj;
 		local_ts[i] = sync_glob + (local_ts[i] - sync_loc);
-		local_ts[i] += (uint64_t)dt;
+		local_ts[i] += (int64_t)dt;
 	}
 	return 0;
 }
@@ -117,14 +117,16 @@ int timekeeper_add_sync_point(struct timekeeper *tk, uint64_t local_ts, uint64_t
 	uint64_t glob_est;
 	double adj;
 	int64_t offset;
+	int64_t delta;
 	double dt;
 
 
 	//calculate estimated global time for the given local timestamp
-	dt = (double)(local_ts - last_sp->local_ts)*last_sp->adj;
+	delta = (int64_t)(local_ts - last_sp->local_ts);
+	dt = (double)(delta)*last_sp->adj;
 	glob_est = last_sp->global_ts + (local_ts - last_sp->local_ts);
-	glob_est += (uint64_t)dt;
-
+	glob_est += (int64_t)dt;
+	//fprintf(stderr,"Exta for est : %"PRId64"\n",(int64_t)dt);
 	offset = glob_est - ptp_ts;
 	// feed the offset between the estimation and the real timestamp into the servo
 	adj = servo_sample(tk->s,offset,local_ts,1,&tk->state);
@@ -138,9 +140,12 @@ int timekeeper_add_sync_point(struct timekeeper *tk, uint64_t local_ts, uint64_t
 	new_sp->ptp_global = ptp_ts;
 	// save the sync point timestamps
 	new_sp->local_ts = local_ts + tk->sync_offset;
-	dt = (double)(new_sp->local_ts - last_sp->local_ts)*last_sp->adj;
+
+	delta =  (int64_t)(new_sp->local_ts - last_sp->local_ts); 
+	dt = (double)(delta)*last_sp->adj;
 	new_sp->global_ts = last_sp->global_ts + (new_sp->local_ts - last_sp->local_ts);
-	new_sp->global_ts += (uint64_t)dt;
+	new_sp->global_ts += (int64_t)dt;
+	//fprintf(stderr,"Exta for new sp : %"PRId64"\n",(int64_t)dt);
 
 	switch (tk->state) {
 	case SERVO_UNLOCKED:
@@ -178,11 +183,13 @@ int timekeeper_add_sync_point(struct timekeeper *tk, uint64_t local_ts, uint64_t
 					"\tptp time:             %"PRIu64"\n"
 					"\toffset:               %"PRId64"\n"
 					"\tadj:                  %lf\n"
+					"\tprev adj:             %lf\n"
 					"\tsync local:  %"PRIu64"\n"
-					"\tsync global: %"PRIu64"\n",new_sp->ptp_local, glob_est, new_sp->ptp_global, offset, adj, new_sp->local_ts, new_sp->global_ts);
+					"\tsync global: %"PRIu64"\n"
+					"\tServo state: %d\n" ,new_sp->ptp_local, glob_est, new_sp->ptp_global, offset, adj,-last_sp->adj*1e9, new_sp->local_ts, new_sp->global_ts,tk->state);
 #endif
 
-	fprintf(tk->log,"%"PRIu64",%"PRIu64",%"PRIu64"\n",ptp_ts,local_ts,glob_est);
+	fprintf(tk->log,"%"PRIu64",%"PRIu64",%"PRIu64",%lf\n",ptp_ts,local_ts,glob_est,adj);
 
 	return 0;
 }
