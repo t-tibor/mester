@@ -5,7 +5,7 @@ ODIR=bin
 
 
 SERVO_TEST_SRC := servo_test.c timekeeper.c timekeeper.h
-ICAP_SRC := icap_channel.c icap_channel.h gpio.c gpio.h timekeeper.c timekeeper.h
+ICAP_SRC := icap_channel.c icap_channel.h gpio.c gpio.h timekeeper.c timekeeper.h ./PPS_servo/PPS_servo.c  ./BBonePPS/BBonePPS.c
 SERVO_SRC := ./servo/servo.c ./servo/pi.c ./servo/linreg.c ./servo/print.c
 LIBS := -lm -lpthread
 

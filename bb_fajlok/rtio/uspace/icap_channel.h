@@ -1,6 +1,7 @@
 #ifndef __DMTIMER_H_
 #define __DMTIMER_H_
 
+#include <stdint.h>
 #include <sys/ioctl.h>
 
 // dmtimer registers
@@ -87,6 +88,96 @@
 #define ICAP_IOCTL_STORE_EN			_IO(ICAP_IOCTL_MAGIC,5)
 #define ICAP_IOCTL_STORE_DIS		_IO(ICAP_IOCTL_MAGIC,6)
 #define ICAP_IOCTL_FLUSH			_IO(ICAP_IOCTL_MAGIC,7)
+
+
+// structure definitions
+
+struct icap_channel
+{
+	char *dev_path;
+	unsigned idx;
+	int fdes;
+	int32_t offset;
+	uint64_t mult;
+	uint64_t div;
+};
+
+
+
+// timer character device interface for the timers
+struct dev_if
+{
+	char *path;
+	int fdes;
+	volatile uint8_t *base;
+};
+
+// timer interface
+enum timer_clk_source_t {SYSCLK=0, TCLKIN=1};
+
+struct dmtimer
+{
+	char 								*name;
+	char 								*dev_path;
+	char 								*icap_path;
+	int 								idx;
+
+	enum timer_clk_source_t 			clk_source;
+	uint32_t							load;
+	uint32_t							match;
+	int 								enable_oc;
+	int 								enable_icap;
+	int 								pin_dir; //1:in, 0:out
+	// private
+	struct dev_if						dev;
+	struct icap_channel 				channel;
+};
+
+struct ecap_timer
+{
+	char 								*name;
+	char 								*dev_path;
+	char 								*icap_path;
+	int 								idx;
+
+	uint32_t							event_div;
+	uint8_t 							hw_fifo_size;
+	// private
+	struct dev_if						dev;
+	struct icap_channel 				channel;
+
+};
+
+// pps signal 
+struct PPS_servo_t
+{
+	struct icap_channel *feedback_channel;
+	struct dmtimer *pwm_gen;
+};
+
+
+//public functions
+
+//icap channel
+int open_channel(struct icap_channel *c, char *dev_path, int idx, int bit_cnt, int mult, int div);
+void close_channel(struct icap_channel *c);
+int read_channel_raw(struct icap_channel *c, uint64_t *buf, unsigned len);
+int channel_do_conversion(struct icap_channel *c, uint64_t *buf, unsigned len);
+int read_channel(struct icap_channel *c, uint64_t *buf, unsigned len);
+void flush_channel(struct icap_channel *c);
+void disable_channel(struct icap_channel *c);
+
+// dmtimer
+int init_dmtimer(struct dmtimer *t);
+void close_dmtimer(struct dmtimer *t);
+int dmtimer_pwm_apply_offset(struct dmtimer *t, int32_t offset);
+int dmtimer_pwm_set_period(struct dmtimer *t, uint32_t period);
+
+
+// structures for the pps generation
+extern struct timekeeper *tk;
+
+extern int quit;
 
 
 

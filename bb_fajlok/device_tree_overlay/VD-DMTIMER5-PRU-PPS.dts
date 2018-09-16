@@ -11,9 +11,10 @@
             timer_pru_pps: pinmux_timer_pru_pps {
                 pinctrl-single,pins = <
 
-					//0x094 0x02	// P8.08, GPIO67 , 			MODE7 | OUTPUT | GPIO
-					0x09c 0x02	// P8.09, GPIO69 , 				MODE2 | OUTPUT | TIMER5       	
-					0x030 0x06  // P8.12 pr1_pru0_pru_r30_14 ,	MODE6 | OUTPUT | PRU
+					//0x094 0x02	// P8.08, GPIO67 , MODE7 | OUTPUT | GPIO
+					0x098 0x32	// P8.10  GPIO68 , MODE2 | INPUT | PULLUP | TIMER6
+					0x09c 0x32	// P8.09, GPIO69 , MODE2 | INPUT | PULLUP | TIMER5      
+					0x030 0xf       // P8.12         , MODE7 | OUTPUT | NOPULL | GPIO
 					0x03c 0x26	// P8.15 pr1_pru0_pru_r31_15 ,	MODE6 | INPUT  | PRU		
 
 				>;
@@ -41,6 +42,20 @@
 		P8_09{
 			gpio-name="P8_09";
 			gpio=<&gpio2 5 0>;
+			input;
+			dir-changeable;
+		};
+
+		P8_10{
+			gpio-name="P8_10";
+			gpio=<&gpio2 4 0>;
+			input;
+			dir-changeable;
+		};
+
+		P8_12{
+			gpio_name="P8_12";
+			gpio=<&gpio1 0xc 0x0>;
 			input;
 			dir-changeable;
 		};

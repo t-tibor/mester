@@ -15,9 +15,11 @@
 
 #include <pthread.h>
 
+#include "icap_channel.h"
 #include "timekeeper.h"
 #include "icap_channel.h"
 #include "gpio.h"
+#include "./PPS_servo/BBonePPS.h"
 
 //#define assert(x) {if(!(x)) {fprintf(stderr,"Assertion error. File:%s, Line:%d\n",__FILE__,__LINE__); while(1) sleep(1); }}
 
@@ -59,15 +61,6 @@ void write8(volatile uint8_t *base, int offset, uint8_t val)
 
 
 
-struct icap_channel
-{
-	char *dev_path;
-	unsigned idx;
-	int fdes;
-	int32_t offset;
-	uint64_t mult;
-	uint64_t div;
-};
 
 
 // input capture channels
@@ -159,9 +152,9 @@ int open_channel(struct icap_channel *c, char *dev_path, int idx, int bit_cnt, i
 
 void close_channel(struct icap_channel *c)
 {
-	deregister_channel(c);
 	if(c->fdes > 0)
 	{
+		deregister_channel(c);
 		// wake up readers
 		ioctl(c->fdes,ICAP_IOCTL_STORE_DIS);
 		close(c->fdes);
@@ -206,7 +199,8 @@ int read_channel(struct icap_channel *c, uint64_t *buf, unsigned len)
 
 void flush_channel(struct icap_channel *c)
 {
-	ioctl(c->fdes,ICAP_IOCTL_FLUSH);
+	if(c && c->fdes > 0)
+		ioctl(c->fdes,ICAP_IOCTL_FLUSH);
 }
 
 void disable_channel(struct icap_channel *c)
@@ -215,13 +209,13 @@ void disable_channel(struct icap_channel *c)
 }
 
 
-// timer character device interface for the timers
-struct dev_if
-{
-	char *path;
-	int fdes;
-	volatile uint8_t *base;
-};
+// // timer character device interface for the timers
+// struct dev_if
+// {
+// 	char *path;
+// 	int fdes;
+// 	volatile uint8_t *base;
+// };
 
 #define PAGE_SIZE 	4096
 int dev_if_open(struct dev_if *dev, char *path)
@@ -271,48 +265,59 @@ void dev_if_close(struct dev_if *dev)
 	}
 }
 
-// timer interface
-enum timer_clk_source_t {SYSCLK=1, TCLKIN=2};
+// // timer interface
+// enum timer_clk_source_t {SYSCLK=1, TCLKIN=2};
 
-struct dmtimer
-{
-	char 								*name;
-	char 								*dev_path;
-	char 								*icap_path;
-	int 								idx;
+// struct dmtimer
+// {
+// 	char 								*name;
+// 	char 								*dev_path;
+// 	char 								*icap_path;
+// 	int 								idx;
 
-	uint32_t							load;
-	uint32_t							match;
-	int 								enable_oc;
-	int 								enable_icap;
-	int 								pin_dir; //1:in, 0:out
-	// private
-	struct dev_if						dev;
-	struct icap_channel 				channel;
-};
+// 	uint32_t							load;
+// 	uint32_t							match;
+// 	int 								enable_oc;
+// 	int 								enable_icap;
+// 	int 								pin_dir; //1:in, 0:out
+// 	// private
+// 	struct dev_if						dev;
+// 	struct icap_channel 				channel;
+// };
 
-struct ecap_timer
-{
-	char 								*name;
-	char 								*dev_path;
-	char 								*icap_path;
-	int 								idx;
+// struct ecap_timer
+// {
+// 	char 								*name;
+// 	char 								*dev_path;
+// 	char 								*icap_path;
+// 	int 								idx;
 
-	uint32_t							event_div;
-	uint8_t 							hw_fifo_size;
-	// private
-	struct dev_if						dev;
-	struct icap_channel 				channel;
+// 	uint32_t							event_div;
+// 	uint8_t 							hw_fifo_size;
+// 	// private
+// 	struct dev_if						dev;
+// 	struct icap_channel 				channel;
 
-};
+// };
 
-#define DMTIMER_CNT 3
+#define DMTIMER_CNT 4
 
 struct dmtimer dmt[DMTIMER_CNT] = {
+	{	.name = "dmtimer4",
+		.dev_path = "/dev/DMTimer4",
+		.icap_path = "/dev/dmtimer4_icap",
+		.idx = 4,
+		.clk_source = TCLKIN,
+		.load = 0,
+		.match = 10,
+		.enable_oc = 1,
+		.enable_icap = 0,
+		.pin_dir = 0
+	},
 	{	.name = "dmtimer5",
 		.dev_path = "/dev/DMTimer5",
 		.icap_path = "/dev/dmtimer5_icap",
-		.idx = 3,
+		.idx = 5,
 		.load = 0xFF800000,
 		.match = 0xFFA00000,
 		.enable_oc = 1,
@@ -323,7 +328,7 @@ struct dmtimer dmt[DMTIMER_CNT] = {
 	{	.name = "dmtimer6",
 		.dev_path = "/dev/DMTimer6",
 		.icap_path = "/dev/dmtimer6_icap",
-		.idx = 4,
+		.idx = 6,
 		.load = 0,
 		.match = 0,
 		.enable_oc = 0,
@@ -334,16 +339,19 @@ struct dmtimer dmt[DMTIMER_CNT] = {
 	{	.name = "dmtimer7",
 		.dev_path = "/dev/DMTimer7",
 		.icap_path = "/dev/dmtimer7_icap",
-		.idx = 5,
-		.load = 0,
-		.match = 0,
-		.enable_oc = 0,
-		.enable_icap = 1,
-		.pin_dir = 1
+		.idx = 7,
+		.load = 0x100000000ULL - 24000000,
+		.match = 0x100000000ULL- 18000000,
+		.enable_oc = 1,
+		.enable_icap = 0,
+		.pin_dir = 0
 	}
 };
 
-struct dmtimer *trigger_timer = &dmt[0];
+struct dmtimer *dmtimer4 = &dmt[0];
+struct dmtimer *trigger_timer = &dmt[1];
+struct dmtimer *dmtimer6 = &dmt[2];
+struct dmtimer *dmtimer7 = &dmt[3];
 
 #define ECAP_CNT 3
 struct ecap_timer ecap[ECAP_CNT] = {
@@ -373,12 +381,22 @@ struct ecap_timer ecap[ECAP_CNT] = {
 	}
 };
 
+
+
 int timer_enable_clk(struct dev_if *dev)
 {
 	assert(dev);
 	assert(dev->fdes > 0);
 	return ioctl(dev->fdes, TIMER_IOCTL_SET_CLOCK_STATE, TIMER_CLK_ENABLE);
 }
+
+int timer_disable_clk(struct dev_if *dev)
+{
+	assert(dev);
+	assert(dev->fdes > 0);
+	return ioctl(dev->fdes, TIMER_IOCTL_SET_CLOCK_STATE, TIMER_CLK_DISABLE);
+}
+
 int timer_set_clk_source(struct dev_if *dev, enum timer_clk_source_t clk)
 {
 	int ret;
@@ -440,41 +458,59 @@ int init_dmtimer(struct dmtimer *t)
 
 	ret = dev_if_open(&t->dev,t->dev_path);
 	if(ret)
-		return -1;
-
-	rate = timer_get_clk_freq(&t->dev);
-	mult = 1000000000;
-	div = rate;
-	while( (mult%10 == 0) && (div%10==0))
 	{
-		mult /= 10; div /= 10;
-	}
-
-	bit_cnt = get_effective_bit_cnt(t->load);
-	if(bit_cnt <= 0)
-	{
-		fprintf(stderr,"Invalid bitcount @ timer %s.\n",t->dev_path);
-		dev_if_close(&t->dev);
+		fprintf(stderr,"Cannot open dmtimer device interface.\n");
 		return -1;
 	}
 
-	fprintf(stderr,"Opening channel: %s.\n",t->icap_path);
-	ret = open_channel(&t->channel,t->icap_path, t->idx,bit_cnt, mult,div);
-	if(ret)
+	if(t->enable_icap)
 	{
-		fprintf(stderr,"Cannot open chanel %s.\n",t->icap_path);
-		dev_if_close(&t->dev);
+		rate = timer_get_clk_freq(&t->dev);
+		mult = 1000000000;
+		div = rate;
+		while( (mult%10 == 0) && (div%10==0))
+		{
+			mult /= 10; div /= 10;
+		}
+
+		bit_cnt = get_effective_bit_cnt(t->load);
+		if(bit_cnt <= 0)
+		{
+			fprintf(stderr,"Invalid bitcount @ timer %s.\n",t->dev_path);
+			dev_if_close(&t->dev);
+			return -1;
+		}
+
+		fprintf(stderr,"Opening channel: %s.\n",t->icap_path);
+		ret = open_channel(&t->channel,t->icap_path, t->idx,bit_cnt, mult,div);
+		if(ret)
+		{
+			fprintf(stderr,"Cannot open chanel %s.\n",t->icap_path);
+			dev_if_close(&t->dev);
+		}
+		fprintf(stderr,"Clock rate: %lu, mult: %lu, div: %lu\n",rate,mult,div);
 	}
-	fprintf(stderr,"Clock rate: %lu, mult: %lu, div: %lu\n",rate,mult,div);
+	else
+		t->channel.fdes = -1;
 
 	// test the mapping
 	tmp = read32(t->dev.base,DMTIMER_TIDR); assert(tmp == 0x4FFF1301);
+
+	// setting clock source
+	ret = timer_set_clk_source(&t->dev, t->clk_source);
+	if(ret)
+	{
+		fprintf(stderr,"Cannot set timer clock.\n");
+		close_channel(&t->channel);
+		dev_if_close(&t->dev);
+		return -1;
+	}
 	// enable timers clock
 	ret = timer_enable_clk(&t->dev);
-
 	if(ret) 
 	{
 		fprintf(stderr,"Cannot enable clock for %s.\n",t->dev_path);
+		timer_set_clk_source(&t->dev,SYSCLK);
 		close_channel(&t->channel);
 		dev_if_close(&t->dev);
 		return -1;
@@ -502,13 +538,36 @@ void close_dmtimer(struct dmtimer *t)
 {
 	// stop the timer and disable interrupts
 	uint32_t cntrl;
-	cntrl = read32(t->dev.base,DMTIMER_TCLR);
-	cntrl &= ~(TCRR_ST);
-	write32(t->dev.base,DMTIMER_TCLR,cntrl);
-	write32(t->dev.base,DMTIMER_IRQENABLE_CLR,0xFF);
+	if(t->dev.base)
+	{
+		cntrl = read32(t->dev.base,DMTIMER_TCLR);
+		cntrl &= ~(TCRR_ST);
+		write32(t->dev.base,DMTIMER_TCLR,cntrl);
+		write32(t->dev.base,DMTIMER_IRQENABLE_CLR,0xFF);
+	}
+	timer_set_clk_source(&t->dev,SYSCLK);
+	timer_disable_clk(&t->dev);
 
 	close_channel(&t->channel);
 	dev_if_close(&t->dev);
+}
+
+int dmtimer_pwm_apply_offset(struct dmtimer *t, int32_t offset)
+{
+	uint32_t cntr = read32(t->dev.base,DMTIMER_TCRR);
+	write32(t->dev.base,DMTIMER_TCRR,(uint32_t)((int32_t)(cntr) + offset));
+	return 0;
+}
+
+
+int dmtimer_pwm_set_period(struct dmtimer *t, uint32_t period)
+{
+	uint32_t ld;
+	ld = 0xFFFFFFFF - period;
+	ld ++;
+
+	write32(t->dev.base,DMTIMER_TLDR,ld);
+	return 0;
 }
 
 int init_ecap(struct ecap_timer *e)
@@ -518,7 +577,11 @@ int init_ecap(struct ecap_timer *e)
 	long rate, mult, div;
 
 	ret = dev_if_open(&e->dev,e->dev_path);
-	if(ret) return -1;
+	if(ret) 
+	{
+		fprintf(stderr,"Cannot open ecap device interface.");
+		return -1;
+	}
 
 	rate = timer_get_clk_freq(&e->dev);
 	mult = 1000000000;
@@ -545,6 +608,7 @@ int init_ecap(struct ecap_timer *e)
 	ret = timer_enable_clk(&e->dev); 
 	if(ret)
 	{
+		fprintf(stderr,"Cannot enable ecap clk.\n");
 		close_channel(&e->channel);
 		dev_if_close(&e->dev);
 		return -1;
@@ -690,7 +754,7 @@ int ptp_get_ts(struct timespec *ts)
 	{
 		return 0;
 	}
-	else if(cnt > sizeof(struct ptp_extts_event))
+	else if(cnt > (int)sizeof(struct ptp_extts_event))
 	{
 		fprintf(stderr,"PTP timestamp accumulation.\n");
 	}
@@ -737,7 +801,6 @@ void *timekeeper_worker(void *arg)
 	{
 		// calc hwts times from timer 5 settings
 		ptp_get_ts(&tspec);
-		
 		// if(pres == 0)
 		// 	printf("PTP time: %ld sec, %lunsec\n",tspec.tv_sec, tspec.tv_nsec);
 		// pres = (pres+1) & 0x3;
@@ -793,6 +856,210 @@ void *channel_logger(void *arg)
 }
 
 
+// Base on LinuxPTP servo
+void *pps_worker(void *arg)
+{
+	struct PPS_servo_t *data = (struct PPS_servo_t*)arg;
+	struct icap_channel *ch = data->feedback_channel;
+	struct servo *s;
+	enum servo_state state;
+	int rcvCnt;
+	uint64_t ts[16];
+
+	uint32_t timer_period = 24000000;
+	uint32_t timer_period_prev = 24000000;
+
+	uint64_t base;
+	int64_t fraction;
+	int64_t offset;
+	double adj;
+	double period_delta;
+
+
+	s = servo_create(CLOCK_SERVO_PI, 0, MAX_FREQUENCY,0);
+	if(!s)
+	{
+		fprintf(stderr,"Cannot create PPS servo\n");
+		return NULL;
+	}
+	
+	// init servo
+	state = SERVO_UNLOCKED;
+	servo_sync_interval(s, 1); //set interval for 1 sec
+	servo_reset(s);
+
+
+	flush_channel(ch);
+	// get the first ts, this will be the starting time
+
+do
+{
+	rcvCnt = read_channel(ch, ts,16);
+	if(rcvCnt <= 0)
+		break; // channel closed, exit
+
+	base = ts[rcvCnt-1]; 
+	
+	// rouding base to the closest whole second
+	// offset: distance from the closest whole second
+	fraction = base % 1000000000ULL;
+	if(fraction > 500000000LL)
+	{
+		base = base + 1000000000 - fraction;
+		offset = 1000000000 - fraction;
+	}
+	else
+	{
+		base -= fraction;
+		offset = -fraction;
+	}
+
+// LINUXPTP servo
+	while(!quit)
+	{
+		fprintf(stderr,"PPS base: %"PRIu64", PPS offset: %"PRId64"\n",base,offset);
+		// feed data into the servo
+		adj = servo_sample(s,offset,base,1,&state);
+
+		fprintf(stderr,"\tServo state: %d\n",state);
+
+		switch (state) {
+		case SERVO_UNLOCKED:
+			break;
+		case SERVO_JUMP:
+			dmtimer_pwm_apply_offset(data->pwm_gen, -offset/42);
+			fprintf(stderr,"\tApplying pwm offset: %"PRId64"\n",-offset);
+
+			period_delta = 24000000*adj*1e-9;
+			fprintf(stderr,"\tPWM period delta: %lf\n",period_delta);			
+			timer_period = 24000000 + period_delta;
+			if(timer_period != timer_period_prev)
+			{
+				dmtimer_pwm_set_period(data->pwm_gen, timer_period);
+				timer_period_prev = timer_period;
+			}
+			break;
+		case SERVO_LOCKED:
+			period_delta = 24000000*adj*1e-9;
+			fprintf(stderr,"\tadj:%lf PWM period delta: %lf\n",adj,period_delta);			
+			timer_period = 24000000 / (1-adj*1e-9);
+			if(timer_period != timer_period_prev)
+			{
+				dmtimer_pwm_set_period(data->pwm_gen, timer_period);
+				timer_period_prev = timer_period;
+			}
+			break;
+		}
+		
+
+
+		base += 1000000000;
+
+		rcvCnt = read_channel(ch, ts,1);
+		if(rcvCnt <= 0)
+			break; // channel closed, exit
+
+
+		fprintf(stderr,"\nPTP :%"PRIu64",sec %"PRIu64"nsec\n",ts[0]/1000000000, ts[0]%1000000000);	
+
+		offset = base - ts[0];
+	}
+
+}while(0);
+
+	servo_destroy(s);
+	return NULL;
+}
+
+/*
+void *MyBBonePPS_worker(void *arg)
+{
+	struct PPS_servo_t *data = (struct PPS_servo_t*)arg;
+	struct icap_channel *ch = data->feedback_channel;
+	struct BBonePPS_t *s;
+	int rcvCnt;
+	uint64_t ts[16];
+
+
+	uint64_t base;
+	int64_t fraction;
+	int64_t offset;
+
+	s = BBonePPS_create();
+	if(!s)
+	{
+		fprintf(stderr,"Cannot create PPS servo\n");
+		return NULL;
+	}
+	
+
+	flush_channel(ch);
+	// get the first ts, this will be the starting time
+
+do
+{
+	rcvCnt = read_channel(ch, ts,16);
+	if(rcvCnt <= 0)
+		break; // channel closed, exit
+
+	base = ts[rcvCnt-1]; 
+	
+	// rouding base to the closest whole second
+	// offset: distance from the closest whole second
+	fraction = base % 1000000000ULL;
+	if(fraction > 500000000LL)
+	{
+		base = base + 1000000000 - fraction;
+		offset = fraction-1000000000;
+	}
+	else
+	{
+		base -= fraction;
+		offset = fraction;
+	}
+
+	while(!quit)
+	{
+		// feed data into the servo
+		BBonePPS_sample(s, offset);
+
+
+		switch (s->state) {
+		case SERVO_OFFSET_JUMP:
+
+			dmtimer_pwm_apply_offset(data->pwm_gen, offset/42);
+			fprintf(stderr,"\tApplying pwm offset: %"PRId64"\n",-offset);
+			
+			break;
+		default:
+			dmtimer_pwm_set_period(data->pwm_gen, s->period);
+			break;
+		}
+		
+
+
+		base += 1000000000;
+
+		rcvCnt = read_channel(ch, ts,1);
+		if(rcvCnt <= 0)
+			break; // channel closed, exit
+
+
+		//fprintf(stderr,"\nPTP :%"PRIu64",sec %"PRIu64"nsec\n",ts[0]/1000000000, ts[0]%1000000000);	
+
+		offset = ts[0] - base;
+	}
+}while(0);
+
+	BBonePPS_destroy(s);
+	return NULL;
+}
+*/
+
+
+void *pps_servo_worker(void *arg);
+
+
 
 void signal_handler(int sig)
 {
@@ -801,8 +1068,7 @@ void signal_handler(int sig)
 	quit = 1;
 }
 
-
-#define CHANNEL_NUM 6
+#define CHANNEL_NUM 10
 #define SYNC_OFFSET 1000000 // 1ms
 #define TIMEKEEPER_LOG_NAME	"./timekeeper.log"
 
@@ -811,11 +1077,13 @@ int main()
 {
 	int err = 0;
 	//pthread_t timkeeper_thread_id;
-	pthread_t channel3_logger;
+	//pthread_t channel3_logger;
 	pthread_t channel4_logger;
+	pthread_t pps_servo;
 
 	uint64_t ts[CHANNEL_NUM];
 	double trigger_period;
+	struct PPS_servo_t pps;
 
 
 	// install signal handler for exit handling
@@ -844,10 +1112,6 @@ int main()
 	// Initial offset cancelation
 	printf("Offset cancellation.\n");
 
-	for(int i=0;i<CHANNEL_NUM;i++)
-		flush_channel(channel_slot[i]);
-
-
 	init_sync_gpio();
 	//change timer event source to gpio interrupt
 	for(int i=0;i<DMTIMER_CNT;i++)
@@ -855,17 +1119,23 @@ int main()
 	for(int i=0;i<ECAP_CNT;i++)
 		timer_set_icap_source(&ecap[i].dev,17);
 
+
+	for(int i=0;i<CHANNEL_NUM;i++)
+		if(channel_slot[i])
+			flush_channel(channel_slot[i]);
+
 	trigger_sync_gpio();
 	close_sync_gpio();
 
 	
 	printf("Sync point timestamps:\n");
 	for(int i=0;i<CHANNEL_NUM;i++)
-	{
-		read_channel_raw(channel_slot[i],&ts[i],1);
-		printf("%s - 0x%016llx\n",channel_slot[i]->dev_path, ts[i]);
-		channel_slot[i]->offset = -ts[i];
-	}
+		if(channel_slot[i])
+		{
+			read_channel_raw(channel_slot[i],&ts[i],1);
+			printf("%s - 0x%016llx\n",channel_slot[i]->dev_path, ts[i]);
+			channel_slot[i]->offset = -ts[i];
+		}
 	printf("Offset cancellation ready.\n");
 
 
@@ -874,40 +1144,46 @@ int main()
 		timer_set_icap_source(&dmt[i].dev,0);
 	for(int i=0;i<ECAP_CNT;i++)
 		timer_set_icap_source(&ecap[i].dev,0);
+	// timer_set_icap_source(&dmt[0].dev,17);
 
 
 	//start channel loggers
-	err = pthread_create(&channel3_logger, NULL, channel_logger, (void*)&dmt[0].channel);
-	if(err)
-		fprintf(stderr,"Cannot start the dmtimer5 logger.\n");
+	//err = pthread_create(&channel3_logger, NULL, channel_logger, (void*)&dmt[0].channel);
+	//if(err)
+//		fprintf(stderr,"Cannot start the dmtimer5 logger.\n");
 
-	err = pthread_create(&channel4_logger, NULL, channel_logger, (void*)&dmt[1].channel);
+	err = pthread_create(&channel4_logger, NULL, channel_logger, (void*)&dmt[2].channel);
 	if(err)
 		fprintf(stderr,"Cannot start the dmtimer6 logger.\n");
+
+	// start pps servo
+	pps.feedback_channel = &dmt[1].channel;	// timer5
+	pps.pwm_gen = &dmt[3];							// timer7
+
+	err = pthread_create(&pps_servo, NULL, pps_servo_worker, (void*)&pps);
+	if(err)
+		fprintf(stderr,"Cannot start the PPS servo thread.\n");
+
 
 
 	// do the timekeeper work
 	timekeeper_worker((void*)tk);
 
+	// signal receivd to stop
+	// close channels to wake up thre reader threads
 	for(int i=0;i<CHANNEL_NUM;i++)
-	{
-		disable_channel(channel_slot[i]);
-	}
-	disable_channel(&dmt[0].channel);
-	disable_channel(&dmt[1].channel);
-	
-	fprintf(stderr,"Waiting for the reader threads.\n");
+		if(channel_slot[i])
+			disable_channel(channel_slot[i]);
 
+
+	fprintf(stderr,"Waiting for the reader threads.\n");
 	void *ret;
-	pthread_join(channel3_logger,&ret);
+	//pthread_join(channel3_logger,&ret);
 	pthread_join(channel4_logger,&ret);
 
 
 	fprintf(stderr,"Closing timers.\n");	
 	close_timers();
-
-	
-
 
 return 0;
 }
