@@ -1,0 +1,8 @@
+#!/bin/bash
+
+echo "Compiling the overlay from .dts to .dtbo"
+dtc -O dtb -o DT-ADC-EXT.dtbo -b 0 -@ DT-ADC-EXT.dts
+
+
+echo "OK!"	
+

@@ -12,7 +12,6 @@
 #define ROUND_2_INT(f) ((int)((f) >= 0.0 ? ((f) + 0.5) : ((f) - 0.5)))
 
 #define LOG(x, ...) 		fprintf(stderr,"[PPS servo]" x,  ##__VA_ARGS__);
-#define EXPORT(f,x,...) 	fprintf(f,"[#]" x,  ##__VA_ARGS__);
 
 
 #define USE_PREDICTOR					1
@@ -20,10 +19,11 @@
 #define SERVO_STATE_0_OFFSET_LIMIT 		5000 // do offset correction until the error is less than 5us
 
 #define SERVO_STATE_1_PROP_FACTOR 		(0.9)
-#define SERVO_STATE_1_OFFSET_LIMIT		2000
+#define SERVO_STATE_1_OFFSET_LIMIT		20000
 
 #define SERVO_STATE_2_PROP_FACTOR		(0.5)
 #define SERVO_STATE_2_AVG_CNT			16
+#define SERVO_STATE_2_MAX_OFFSET		20000 // stay in sate 2 until 20 usec error
 
 #define BUF_SIZE 			32
 #define BUF_MASK 			(32-1)
@@ -42,15 +42,28 @@ void *pps_servo_worker(void *arg)
 	uint32_t period_base;
 	int32_t period_comp;
 	uint32_t new_period;
+	uint32_t prev_period;
 
 	uint32_t idx;
 	int servo_state;
+	int ok_count;
 
 	// offset corr
 	uint64_t base;
 	int32_t offset;
 	int32_t offset_pred;
 
+	// output file
+	FILE *fout;
+
+	fout = fopen("./pps.log","w");
+	if(!fout)
+	{
+		LOG("Cannot open the output file.\n");
+		return 0;
+	}
+	// print header
+	fprintf(fout,"Local timestamp, global timestamp, global difference, tick sum, offset, predicated offset, period base, period compensation\n");
 	
 	// waiting timekeeper to converge
 	LOG("Waiting for the timekeeper to stabilize. ");
@@ -121,6 +134,7 @@ void *pps_servo_worker(void *arg)
 			LOG("Servo state 1 (one step drift estimation).\n");
 			idx = 0;
 			p[0] = 24000000;
+			ok_count = 0;
 			while( (servo_state == 1) && (!quit))
 			{
 				double global_diff;
@@ -146,9 +160,11 @@ void *pps_servo_worker(void *arg)
 					// calc period offset
 					offset = ts_g - base;   // time difference to the closest whole second in ns.
 
+					prev_period = p[idx & BUF_MASK];
+
 					#if USE_PREDICTOR == 1
 						// calculate offset at the next whole second
-						offset_pred = (uint32_t)((double)(offset) + ((int32_t)p[idx & BUF_MASK] - (int32_t)period_base)*41.667);
+						offset_pred = (int32_t)((double)(offset) + ((int32_t)prev_period - (int32_t)period_base)*41.667);
 					#else
 						offset_pred = offset;
 					#endif
@@ -167,14 +183,20 @@ void *pps_servo_worker(void *arg)
 				idx++;
 				p[idx&BUF_MASK] = new_period;
 
-				if(offset > SERVO_STATE_0_OFFSET_LIMIT)
+				if(abs(offset) > 2*SERVO_STATE_1_OFFSET_LIMIT)
 					servo_state = 0;
-				else if(offset > SERVO_STATE_1_OFFSET_LIMIT)
+				else if(abs(offset) > SERVO_STATE_1_OFFSET_LIMIT)
 				{
 					// offset too big, restart data collection
-					idx = 0;
+					ok_count = 0;
+
 				}
-				else if(idx > SERVO_STATE_2_AVG_CNT)
+				else
+				{
+					ok_count ++;
+				}
+
+				if(ok_count > SERVO_STATE_2_AVG_CNT)
 				{
 					servo_state = 2;
 				}
@@ -210,9 +232,11 @@ void *pps_servo_worker(void *arg)
 					// calc period offset
 					offset = ts_g - base;   // time difference to the closest whole second in ns.
 
+					prev_period = p[idx & BUF_MASK];
+
 					#if USE_PREDICTOR == 1
 						// calculate offset at the next whole second
-						offset_pred = (uint32_t)((double)(offset) + ((int32_t)p[idx & BUF_MASK] - (int32_t)period_base)*41.667);
+						offset_pred = (int32_t)((double)(offset) + ((int32_t)prev_period - (int32_t)period_base)*41.667);
 					#else
 						offset_pred = offset;
 					#endif
@@ -226,19 +250,29 @@ void *pps_servo_worker(void *arg)
 				idx++;
 				p[idx & BUF_MASK] = new_period;
 
-				LOG("\n\tLocal ts:%"PRIu64", global ts:%"PRIu64"\n\tglob_dif: %lf, tick_sum: %lf\n\toffset: %"PRId32", offset_pred: %"PRId32"\n\tnew period: %"PRIu32" = %"PRIu32" %+"PRId32".\n\n",
+				LOG("\n\tLocal ts:%"PRIu64", global ts:%"PRIu64"\n\tglob_dif: %lf, tick_sum: %lf\n\toffset: %"PRId32", offset_pred: %"PRId32"\n\tprev period: %"PRIu32"\n\tnew period: %"PRIu32" = %"PRIu32" %+"PRId32".\n\n",
 					ts_l,
 					ts_g,
 					global_diff,
 					tick_sum,
 					offset,
 					offset_pred,
+					prev_period,
 					new_period,
 					period_base,
 					period_comp
 					);
 
-				if(offset > SERVO_STATE_1_OFFSET_LIMIT)
+				fprintf(fout,	"%"PRIu64","	// lts
+								"%"PRIu64","	// gts
+								"%lf,%lf,"		// glob_dif , tick_sum
+								"%"PRId32","	// offset
+								"%"PRId32","	// offset pred
+								"%"PRIu32","	// period base
+								"%"PRId32"\n",	// period comp
+								ts_l, ts_g, global_diff, tick_sum, offset, offset_pred, period_base, period_comp);
+
+				if(abs(offset) > SERVO_STATE_2_MAX_OFFSET)
 				{
 					LOG("Restarting servo.\n");
 					break;
@@ -246,5 +280,6 @@ void *pps_servo_worker(void *arg)
 			}
 	}
 	LOG("Terminating.\n");
+	fclose(fout);
 	return NULL;
 }

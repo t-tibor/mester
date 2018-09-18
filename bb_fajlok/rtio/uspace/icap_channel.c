@@ -1078,7 +1078,7 @@ int main()
 	int err = 0;
 	//pthread_t timkeeper_thread_id;
 	//pthread_t channel3_logger;
-	pthread_t channel4_logger;
+	// pthread_t channel4_logger;
 	pthread_t pps_servo;
 
 	uint64_t ts[CHANNEL_NUM];
@@ -1152,9 +1152,9 @@ int main()
 	//if(err)
 //		fprintf(stderr,"Cannot start the dmtimer5 logger.\n");
 
-	err = pthread_create(&channel4_logger, NULL, channel_logger, (void*)&dmt[2].channel);
-	if(err)
-		fprintf(stderr,"Cannot start the dmtimer6 logger.\n");
+	// err = pthread_create(&channel4_logger, NULL, channel_logger, (void*)&dmt[2].channel);
+	// if(err)
+	// 	fprintf(stderr,"Cannot start the dmtimer6 logger.\n");
 
 	// start pps servo
 	pps.feedback_channel = &dmt[1].channel;	// timer5
@@ -1178,8 +1178,9 @@ int main()
 
 	fprintf(stderr,"Waiting for the reader threads.\n");
 	void *ret;
+	(void)ret;
 	//pthread_join(channel3_logger,&ret);
-	pthread_join(channel4_logger,&ret);
+	// pthread_join(channel4_logger,&ret);
 
 
 	fprintf(stderr,"Closing timers.\n");	

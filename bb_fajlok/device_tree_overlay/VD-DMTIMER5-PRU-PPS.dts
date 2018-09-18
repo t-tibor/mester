@@ -10,13 +10,17 @@
         __overlay__ {
             timer_pru_pps: pinmux_timer_pru_pps {
                 pinctrl-single,pins = <
-
 					//0x094 0x02	// P8.08, GPIO67 , MODE7 | OUTPUT | GPIO
-					0x098 0x32	// P8.10  GPIO68 , MODE2 | INPUT | PULLUP | TIMER6
-					0x09c 0x32	// P8.09, GPIO69 , MODE2 | INPUT | PULLUP | TIMER5      
-					0x030 0xf       // P8.12         , MODE7 | OUTPUT | NOPULL | GPIO
-					0x03c 0x26	// P8.15 pr1_pru0_pru_r31_15 ,	MODE6 | INPUT  | PRU		
+					
+					0x090 0X02	// P8_07, GPIO66 , MODE2 | OUTPUT | PULLDOWN | TIMER4
+					0x09c 0x22	// P8.09, GPIO69 , MODE2 | INPUT  | PULLDOWN | TIMER5      
+					0x098 0x22	// P8.10, GPIO68 , MODE2 | INPUT  | PULLDOWN | TIMER6
+					0x094 0x22	// P8_08, GPIO67 , MODE2 | INPUT  | PULLDOWN | TIMER7
 
+					0x030 0x0F      // P8.12         , MODE7 | OUTPUT | NOPULL | GPIO
+					0x03c 0x26	// P8.15 pr1_pru0_pru_r31_15 ,	MODE6 | INPUT  | PRU		
+					0x1b4 0x22	// P9_41A,       , MODE7 | INPUT  | PULLDOWN
+					0x1a8 0x0F	// P9_41B,       , MODE7 | OUTPUT | NOPULL   | GPIO (disable HDMI) 
 				>;
             };
         };

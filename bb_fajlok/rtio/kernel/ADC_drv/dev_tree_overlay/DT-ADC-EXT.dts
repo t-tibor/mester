@@ -1,0 +1,13 @@
+/dts-v1/;
+/{    
+    fragment@0 {
+        target = <&am335x_adc>;
+        __overlay__ {
+
+        		ext,trigger-mode 	= < 0x3 0x1 0x1 0x1 0x1 0x1 0x1 >;	// set channel 0 to hw trigger
+        		ext,hw-preempt 		= < 0x0 >;							// disable hw preemption (not used)
+        		ext,hw-event-map	= < 0x1 >;							// map HW event to HW event input (not pen event)
+        		ext,adc-clkdiv		= < 0x7 >;							// according to tsc driver ADC should run on 3MHz clock, so divide the base 24MHz clock (adc_tsc_fck) by 8 to produce it
+        };
+    };
+};
