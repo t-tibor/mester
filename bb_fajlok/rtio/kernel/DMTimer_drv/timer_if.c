@@ -287,6 +287,7 @@ static int timer_probe(struct platform_device *pdev)
 	struct DMTimer_priv *timer;
 	int ret;
 	char *irq_name;
+	uint8_t use_icap_channel;
 
 	// read up timer index
 	of_property_read_string_index(pdev->dev.of_node, "ti,hwmods", 0, &timer_name);
@@ -295,6 +296,16 @@ static int timer_probe(struct platform_device *pdev)
 	{
 		pr_err("Invalid timer index found in the device tree: %d\n",timer_idx);
 		return -EINVAL;
+	}
+
+	// read up channel state
+	if (of_get_property(pdev->dev.of_node, "ext,enable-icap-channel", NULL)) 
+	{
+		use_icap_channel = 1;
+	}
+	else
+	{
+		use_icap_channel = 0;
 	}
 
 
@@ -352,31 +363,44 @@ static int timer_probe(struct platform_device *pdev)
 		return -ENODEV;
 	}
 
-	timer->icap_channel_name = devm_kasprintf(&pdev->dev, GFP_KERNEL, "%s%d_icap","dmtimer",timer_idx);
-	timer->icap = icap_create_channel(timer->icap_channel_name,13);
-	if(!timer->icap)
-	{
-		dev_err(&pdev->dev,"Cannot initialize icap channel: /dev/%s.\n",timer->misc.name);
-		misc_deregister(&timer->misc);
-		return -ENOMEM;
-	}
 
-	 // remapping irq
- 	timer->irq = irq->start;
- 	irq_name = devm_kasprintf(&pdev->dev, GFP_KERNEL, "%s%d_irq",
-					  dev_name(&pdev->dev),timer_idx);
- 	ret = devm_request_irq(&pdev->dev,timer->irq,timer_irq_handler,0,irq_name,timer);
- 	if(unlikely(ret))
- 	{
- 		dev_err(&pdev->dev, "%s:%d Interrupt allocation (irq:%d) failed [%d].\n", __func__,__LINE__,timer->irq,ret);
- 		icap_delete_channel(timer->icap);
- 		misc_deregister(&timer->misc);
-		return -ENXIO;
- 	}
+	if(1 == use_icap_channel)
+	{
+
+		timer->icap_channel_name = devm_kasprintf(&pdev->dev, GFP_KERNEL, "%s%d_icap","dmtimer",timer_idx);
+		timer->icap = icap_create_channel(timer->icap_channel_name,13);
+		if(!timer->icap)
+		{
+			dev_err(&pdev->dev,"Cannot initialize icap channel: /dev/%s.\n",timer->misc.name);
+			misc_deregister(&timer->misc);
+			return -ENOMEM;
+		}
+
+		 // remapping irq
+	 	timer->irq = irq->start;
+	 	irq_name = devm_kasprintf(&pdev->dev, GFP_KERNEL, "%s%d_irq",
+						  dev_name(&pdev->dev),timer_idx);
+	 	ret = devm_request_irq(&pdev->dev,timer->irq,timer_irq_handler,0,irq_name,timer);
+	 	if(unlikely(ret))
+	 	{
+	 		dev_err(&pdev->dev, "%s:%d Interrupt allocation (irq:%d) failed [%d].\n", __func__,__LINE__,timer->irq,ret);
+	 		icap_delete_channel(timer->icap);
+	 		misc_deregister(&timer->misc);
+			return -ENXIO;
+	 	}
+	 }
+	 else
+	 {
+	 	// icap channel and interrupt handling is not selected for this device
+
+	 	timer->icap_channel_name = NULL;
+	 	timer->icap = NULL;
+	 	timer->irq = -1;
+	 }
 
 
 	dev_info(&pdev->dev,"%s initialization succeeded.\n",timer->name);
-	dev_info(&pdev->dev,"Base address: 0x%lx, length: %u, irq num: %d.\n",timer->regspace_phys_base,timer->regspace_size,timer->irq);
+	dev_info(&pdev->dev,"Base address: 0x%lx, length: %u, irq num: %d, icap channel %s.\n",timer->regspace_phys_base,timer->regspace_size,timer->irq, (timer->icap) ? "enabled" : "disabled");
 
  	platform_set_drvdata(pdev,timer);
 
@@ -401,9 +425,15 @@ static int timer_remove(struct platform_device *pdev)
 	pm_runtime_put_sync(&pdev->dev);
 	pm_runtime_disable(&pdev->dev);
 
-	devm_free_irq(&pdev->dev, timer->irq, timer);
-	
-	icap_delete_channel(timer->icap);
+	if(timer->irq > 0)
+	{
+		devm_free_irq(&pdev->dev, timer->irq, timer);
+	}
+	if(timer->icap)
+	{
+		icap_delete_channel(timer->icap);
+	}
+
 	misc_deregister(&timer->misc);
 
 	// all other resourcees are freed managed

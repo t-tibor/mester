@@ -12,7 +12,7 @@
 
 #include "timekeeper.h"
 
-#define DATA_IN_FILE "../meas/log.txt"
+#define DATA_IN_FILE "../meas/PPS_log/timekeeper_20.log"
 #define DATA_OUT_BASE  "../meas/"
 
 #define TIMEKEEPER_LOG "../meas/tk_log.txt"
@@ -67,7 +67,7 @@ int load_data()
 			continue;
 		}
 
-		ret = sscanf(line, "%" SCNu64 ",%" SCNu64 "\n" ,&ptp[idx],&hw[idx]);
+		ret = sscanf(line, "%" SCNu64 ",%" SCNu64 "," ,&ptp[idx],&hw[idx]);
 		if(ret != 2)
 		{
 			fprintf(stderr,"Cannot fill both value from line %d.\n",line_cnt);
@@ -189,6 +189,11 @@ int main(int argc, char **argv)
 
 // load data
 	dataCnt = load_data();
+	if(dataCnt < 0)
+	{
+		fprintf(stderr,"Cannot import data.\n");
+		return -1;
+	}
 	est = (uint64_t*)malloc(dataCnt*sizeof(uint64_t));
 
 

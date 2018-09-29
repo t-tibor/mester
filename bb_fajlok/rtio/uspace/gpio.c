@@ -25,23 +25,32 @@ static volatile uint8_t *sync_gpio_base = NULL;
 int init_sync_gpio()
 {
 	FILE *f;
-	// export gpio26
-	f = fopen(GPIO_EXPORT_PATH,"w");
-	if(!f)
-	{
-		fprintf(stderr,"Cannot open %s.\n",GPIO_EXPORT_PATH);
-		return -1;
-	}
-	fprintf(f,"%d",SYNC_GPIO_CNT);
-	fclose(f);
-
-	// set pin direction to input
+	
 	f = fopen(SYNC_GPIO_PATH "direction","w");
 	if(!f)
 	{
-		fprintf(stderr,"Cannot open %s.\n",SYNC_GPIO_PATH "direction");
-		return -1;
+		// try to export it
+		f = fopen(GPIO_EXPORT_PATH,"w");
+		if(!f)
+		{
+			fprintf(stderr,"Cannot open %s.\n",GPIO_EXPORT_PATH);
+			return -1;
+		}
+		fprintf(f,"%d",SYNC_GPIO_CNT);
+		fclose(f);
+
+		// wait for the gpio driver to create the gpio26 folder
+		usleep(100000);
+
+		f = fopen(SYNC_GPIO_PATH "direction","w");
+		if(!f)
+		{
+			fprintf(stderr,"Cannot open %s. %m\n",SYNC_GPIO_PATH "direction");
+			return -1;
+		}
 	}
+
+	// set pin direction to input
 	fprintf(f,"in");
 	fclose(f);
 

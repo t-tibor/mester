@@ -45,5 +45,8 @@ int event_mux_set_dmtimer_event(u32 timer_idx, u32 event_id);
 int event_mux_set_ecap_event(u32 ecap_idx, u32 event_id);
 int event_mux_set_adc_event(u32 event_id); 
 
+int event_mux_get_dmtimer_event(u32 timer_idx);
+int event_mux_get_ecap_event(u32 ecap_idx);
+int event_mux_get_adc_event(void);
 
 #endif

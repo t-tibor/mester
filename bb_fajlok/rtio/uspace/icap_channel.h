@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <sys/ioctl.h>
+#include "icap_channel_API.h"
 
 // dmtimer registers
 #define DMTIMER_TIDR				0x00
@@ -122,6 +123,7 @@ struct dmtimer
 	char 								*icap_path;
 	int 								idx;
 
+	int 								enabled;
 	enum timer_clk_source_t 			clk_source;
 	uint32_t							load;
 	uint32_t							match;
@@ -140,6 +142,7 @@ struct ecap_timer
 	char 								*icap_path;
 	int 								idx;
 
+	int 								enabled;
 	uint32_t							event_div;
 	uint8_t 							hw_fifo_size;
 	// private
@@ -153,6 +156,24 @@ struct PPS_servo_t
 {
 	struct icap_channel *feedback_channel;
 	struct dmtimer *pwm_gen;
+};
+
+
+//adc
+struct adc_buffer_t
+{
+	unsigned buffer_size;
+	uint16_t *buffer;
+	uint64_t *ts_buffer;
+
+	uint16_t *buffer_wp;
+	uint64_t *ts_buffer_wp;
+
+// adc interface file descriptor
+	void *fadc;
+// timestamp interface
+	struct icap_channel *ts_icap;
+	int icap_period;
 };
 
 
@@ -176,9 +197,7 @@ int dmtimer_pwm_set_period(struct dmtimer *t, uint32_t period);
 
 // structures for the pps generation
 extern struct timekeeper *tk;
-
-extern int quit;
-
+extern int rtio_quit;
 
 
 #endif

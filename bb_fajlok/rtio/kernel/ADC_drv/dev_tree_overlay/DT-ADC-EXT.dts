@@ -1,6 +1,17 @@
 /dts-v1/;
 /{    
+
+    // enable tscadc module
     fragment@0 {
+        target = <&tscadc>;
+        __overlay__ {
+            status = "okay";
+        };
+    };
+
+
+    // add custom extended parameters
+    fragment@1 {
         target = <&am335x_adc>;
         __overlay__ {
 
@@ -8,6 +19,14 @@
         		ext,hw-preempt 		= < 0x0 >;							// disable hw preemption (not used)
         		ext,hw-event-map	= < 0x1 >;							// map HW event to HW event input (not pen event)
         		ext,adc-clkdiv		= < 0x7 >;							// according to tsc driver ADC should run on 3MHz clock, so divide the base 24MHz clock (adc_tsc_fck) by 8 to produce it
+
+        		// overwiting default values
+        		// DONT FORGET TO DISABLE THE DEFAUT ADC OVERLAY IN THE /boot/uEnv.txt file
+        		ti,adc-channels = <0x0 0x1 0x2 0x3 0x4 0x5 0x6>;
+        		ti,chan-step-sampledelay = < 0x0 0x0 0x0 0x0 0x0 0x0 0x0 >;
+                ti,chan-step-opendelay   = < 0x0 0x0 0x0 0x0 0x0 0x0 0x0 >;
+                ti,chan-step-avg         = < 0x0 0x0 0x0 0x0 0x0 0x0 0x0 >;
+
         };
     };
 };

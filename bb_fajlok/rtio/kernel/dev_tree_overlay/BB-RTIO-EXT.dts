@@ -1,0 +1,94 @@
+/dts-v1/;
+/plugin/;
+/{
+
+    compatible = "ti,beaglebone", "ti,beaglebone-black";
+    part_number = "VD-RTIO";
+	version = "00A0";
+
+// ADD ICAP CHANNEL NOTATION TO THE DMTIMERS
+	fragment@0 { 
+		target = <&timer4>;
+     	__overlay__ {
+     		//ext,enable-icap-channel;
+        };
+	};
+
+	fragment@1 { 
+		target = <&timer5>;
+     	__overlay__ {
+     		ext,enable-icap-channel;
+        };
+	};
+
+	fragment@2 { 
+		target = <&timer6>;
+     	__overlay__ {
+     		ext,enable-icap-channel;
+        };
+	};
+
+	fragment@3 { 
+		target = <&timer7>;
+     	__overlay__ {
+     		//ext,enable-icap-channel;
+        };
+	};
+
+
+// ENABLE HWTS EVENTS ON THE CPTS (TI kernel needs it)
+    // enable CPTS HWTS generation on 4 input lines
+    fragment@4 {
+        target = <&mac>;
+        __overlay__ {
+            cpts-ext-ts-inputs = <4>;
+        };
+    };
+
+// ENABLE eCAP PERIPHERALS
+/* module 1 */
+    fragment@5 {
+        target = <&epwmss0>;
+        __overlay__ {
+            status = "okay";
+        };
+    };
+
+    fragment@6 {
+        target = <&ecap0>;
+        __overlay__ {
+            status = "okay";
+        };
+    };
+
+
+/* module 2 */
+    fragment@7 {
+        target = <&epwmss1>;
+        __overlay__ {
+            status = "okay";
+        };
+    };
+
+    fragment@8 {
+        target = <&ecap1>;
+        __overlay__ {
+            status = "okay";
+        };
+    };
+
+/* module 3 */
+    fragment@9 {
+        target = <&epwmss2>;
+        __overlay__ {
+            status = "okay";
+        };
+    };
+
+    fragment@10 {
+        target = <&ecap2>;
+        __overlay__ {
+            status = "okay";
+        };
+    };
+};

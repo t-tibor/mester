@@ -16,10 +16,10 @@
 
 #define USE_PREDICTOR					1
 
-#define SERVO_STATE_0_OFFSET_LIMIT 		5000 // do offset correction until the error is less than 5us
+#define SERVO_STATE_0_OFFSET_LIMIT 		(1000000) // do offset correction until the error is less than 1ms
 
 #define SERVO_STATE_1_PROP_FACTOR 		(0.9)
-#define SERVO_STATE_1_OFFSET_LIMIT		20000
+#define SERVO_STATE_1_OFFSET_LIMIT		100000
 
 #define SERVO_STATE_2_PROP_FACTOR		(0.5)
 #define SERVO_STATE_2_AVG_CNT			16
@@ -76,7 +76,7 @@ void *pps_servo_worker(void *arg)
 
 	flush_channel(ch);
 
-	while(!quit)
+	while(!rtio_quit)
 	{
 			servo_state = 0;
 			dmtimer_pwm_set_period(pwm_gen, 24000000); // set timer period to nominal value
@@ -107,21 +107,35 @@ void *pps_servo_worker(void *arg)
 
 			// jump correction
 			LOG("Servo state 0 (jump).\n");
-			while((servo_state == 0) && (!quit))
+			while((servo_state == 0) && (!rtio_quit))
 			{
-				base += 1000000000ULL;
 				rcvCnt = read_channel(ch,&ts_l,1);
 				if(!rcvCnt)
 					return NULL;
 
 				ts_g = ts_l;
 				timekeeper_convert(tk,&ts_g,1);
-				offset = ts_g - base;
+				offset = ts_g % 1000000000ULL;
+				base = ts_g - offset;
+				if(offset > 500000000LL)
+				{
+					base += 1000000000ULL;
+					offset = 1000000000ULL - offset;
+				}
+
 
 				// offset correction
 				if(abs(offset > 300000000))
 					offset /= 2;
+
+				if(offset > 500000000)
+					offset = 500000000;
+	
+				if(offset < -500000000)
+					offset = -500000000;
 				
+
+
 				dmtimer_pwm_apply_offset(pwm_gen,  offset/42); // offset is in ns, dmtimer period is 42 nsec
 
 				LOG("Local ts:%"PRIu64", global ts: %"PRIu64", offset: %"PRId32", correction: %d.\n",ts_l, ts_g, offset,offset/42);
@@ -135,7 +149,7 @@ void *pps_servo_worker(void *arg)
 			idx = 0;
 			p[0] = 24000000;
 			ok_count = 0;
-			while( (servo_state == 1) && (!quit))
+			while( (servo_state == 1) && (!rtio_quit))
 			{
 				double global_diff;
 				double tick_sum;
@@ -183,7 +197,7 @@ void *pps_servo_worker(void *arg)
 				idx++;
 				p[idx&BUF_MASK] = new_period;
 
-				if(abs(offset) > 2*SERVO_STATE_1_OFFSET_LIMIT)
+				if(offset > 2*SERVO_STATE_0_OFFSET_LIMIT || offset < -2*SERVO_STATE_0_OFFSET_LIMIT)
 					servo_state = 0;
 				else if(abs(offset) > SERVO_STATE_1_OFFSET_LIMIT)
 				{
@@ -207,7 +221,7 @@ void *pps_servo_worker(void *arg)
 
 			// active controlling
 			LOG("Servo state 2 (averaging drift estimation).\n");
-			while((servo_state == 2) && (!quit))
+			while((servo_state == 2) && (!rtio_quit))
 			{
 				double global_diff;
 				double tick_sum;
@@ -250,6 +264,7 @@ void *pps_servo_worker(void *arg)
 				idx++;
 				p[idx & BUF_MASK] = new_period;
 
+/*
 				LOG("\n\tLocal ts:%"PRIu64", global ts:%"PRIu64"\n\tglob_dif: %lf, tick_sum: %lf\n\toffset: %"PRId32", offset_pred: %"PRId32"\n\tprev period: %"PRIu32"\n\tnew period: %"PRIu32" = %"PRIu32" %+"PRId32".\n\n",
 					ts_l,
 					ts_g,
@@ -262,6 +277,7 @@ void *pps_servo_worker(void *arg)
 					period_base,
 					period_comp
 					);
+					*/
 
 				fprintf(fout,	"%"PRIu64","	// lts
 								"%"PRIu64","	// gts

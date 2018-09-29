@@ -1,8 +1,0 @@
-#!/bin/bash
-
-echo "Compiling the overlay from .dts to .dtbo"
-dtc -O dtb -o DT-ECAP-ENABLE.dtbo -b 0 -@ DT-ECAP-ENABLE.dts
-
-
-echo "OK!"	
-

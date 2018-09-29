@@ -252,8 +252,32 @@ static ssize_t ecap2_event_store(struct kobject *kobj, struct kobj_attribute *at
         return count;
 }
 
+
+
 static struct kobj_attribute ecap2_attribute =__ATTR(ecap2_event, 0660, ecap2_event_show,
                                                    ecap2_event_store);
+
+// adc
+static ssize_t adc_event_show(struct kobject *kobj, struct kobj_attribute *attr,
+                      char *buf)
+{
+        int event = event_mux_get_adc_event();
+        return sprintf(buf,"%d\n",event);
+}
+
+static ssize_t adc_event_store(struct kobject *kobj, struct kobj_attribute *attr,
+                      const char *buf, size_t count)
+{
+		u32 event;
+        sscanf(buf, "%u", &event);
+        event_mux_set_adc_event(event);
+        return count;
+}
+
+static struct kobj_attribute adc_attribute =__ATTR(adc_event, 0660, adc_event_show,
+                                                   adc_event_store);
+
+
 
 
 static int __init event_mux_init(void)
@@ -291,7 +315,9 @@ static int __init event_mux_init(void)
         	sysfs_create_file(event_mux_kobj, &dmtimer7_attribute.attr) ||
         	sysfs_create_file(event_mux_kobj, &ecap0_attribute.attr) ||
         	sysfs_create_file(event_mux_kobj, &ecap1_attribute.attr) ||
-        	sysfs_create_file(event_mux_kobj, &ecap2_attribute.attr)) {
+        	sysfs_create_file(event_mux_kobj, &ecap2_attribute.attr) ||
+			sysfs_create_file(event_mux_kobj, &adc_attribute.attr)
+        	) {
                 pr_err("Failed to create an attribute file\n");
         }
 

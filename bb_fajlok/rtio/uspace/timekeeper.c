@@ -46,6 +46,7 @@ struct timekeeper* timekeeper_create(int servo_type, double sync_interval, uint3
 	ret->head = 0;
 	ret->tail = 0;
 	ret->sync_point_buffer_size = TIMEKEEPER_SYNC_POINT_COUNT;
+	ret->period = sync_interval*1e9;
 
 	memset(&ret->sync_points[0],0,sizeof(struct sync_point_t));
 	ret->sync_points[0].local_ts = sync_offset;
@@ -91,6 +92,9 @@ int timekeeper_convert(struct timekeeper *tk, uint64_t *local_ts, int ts_count)
 	idx = head;
 	for(int i=ts_count-1;i>=0;i--)
 	{
+		if(local_ts[i] > tk->sync_points[head].local_ts + tk-> period)
+			fprintf(stderr,"#Timekeeper convert overrun. Difference: %"PRIu64"\n",local_ts[i] - tk->sync_points[head].local_ts);
+
 		while((local_ts[i] < tk->sync_points[idx].local_ts) && (idx != tail))
 		{
 			idx = (idx - 1) & (tk->sync_point_buffer_size-1);

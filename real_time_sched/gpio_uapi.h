@@ -2,10 +2,10 @@
 #define __GPIO_UAPI__
 
 // local functions
-void gpio_init();
+int gpio_init();
 void gpio_set();
 void gpio_clear();
 void gpio_toggle();
-void gpio_deinit();
+int gpio_deinit();
 
 #endif

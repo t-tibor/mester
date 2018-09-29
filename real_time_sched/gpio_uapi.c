@@ -32,29 +32,35 @@
 #define GPIO_44             (1<<12) 
 
 
-volatile uint32_t *gpio_base;
-volatile uint32_t *gpio_out_en;
-volatile uint32_t *gpio_set_dataout;
-volatile uint32_t *gpio_clear_dataout;
-volatile uint32_t *gpio_dataout;
+static volatile uint32_t *gpio_base;
+static volatile uint32_t *gpio_out_en;
+static volatile uint32_t *gpio_set_dataout;
+static volatile uint32_t *gpio_clear_dataout;
+static volatile uint32_t *gpio_dataout;
 
-int fd;
+static int fd = 0;
 
 // GPIO handler functions
-void gpio_init()
+int gpio_init()
 {
-	
+	if(fd != 0)
+	{
+		fprintf(stderr,"GPIO already open.");
+		return -1;
+	}
 
     if((fd	= open("/dev/mem", O_RDWR | O_SYNC)) < 0)
 	{
+		fd = 0;
 		perror("Opening /dev/mem");
+		return -1;
 	}
 
 	gpio_base = (uint32_t*)mmap(0, GPIO_ADDR_LENGTH, PROT_READ | PROT_WRITE, MAP_SHARED, fd, GPIO_BASE_ADDR);
     if(gpio_base == MAP_FAILED)
     {
     	perror("Unable to map GPIO");
-    	return;
+    	return -1;
     }
 
     // output enable register
@@ -67,6 +73,8 @@ void gpio_init()
 	gpio_clear_dataout = gpio_base + GPIO_CLEARDATAOUT_OFFSET/4;
 
 	gpio_dataout = gpio_base + GPIO_DATAOUT_OFFSET/4;
+
+	return 0;
 }
 
 void gpio_set()
@@ -85,7 +93,7 @@ void gpio_toggle()
 	*gpio_dataout = val;
 }
 
-void gpio_deinit()
+int gpio_deinit()
 {
 	*gpio_out_en = GPIO_44 | *gpio_out_en;
 
@@ -97,4 +105,7 @@ void gpio_deinit()
 	gpio_dataout = NULL;
 
     close(fd);
+    fd = 0;
+
+    return 0;
 }

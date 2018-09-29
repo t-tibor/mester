@@ -30,10 +30,13 @@
 #include <linux/platform_device.h>
 #include <linux/io.h>
 #include <linux/iio/iio.h>
+#include <linux/iio/sysfs.h>
 #include <linux/of.h>
 #include <linux/of_device.h>
 #include <linux/iio/machine.h>
 #include <linux/iio/driver.h>
+#include <linux/mm_types.h>
+#include <linux/stat.h>
 
 #include <linux/mfd/ti_am335x_tscadc.h>
 #include <linux/iio/buffer.h>
@@ -41,6 +44,9 @@
 
 #include <linux/dmaengine.h>
 #include <linux/dma-mapping.h>
+
+
+#include "../event_mux/event_mux.h"
 
 
 
@@ -465,6 +471,44 @@ static const char * const chan_name_ain[] = {
 	"AIN7",
 };
 
+
+static const char * const adc_channel_modes[] = { "SW_ONSH", "SW_CONT", "HW_ONSH", "HW_CONT"};
+
+static int adc_get_channel_mode(struct iio_dev *indio_dev,
+		const struct iio_chan_spec *chan)
+{
+	int channel = chan->channel;
+	struct tiadc_device *adc_dev = iio_priv(indio_dev);
+
+	return adc_dev->trigger_mode[channel];
+}
+
+static int adc_set_channel_mode(struct iio_dev *indio_dev,
+		const struct iio_chan_spec *chan, unsigned int mode)
+{
+	int channel = chan->channel;
+	struct tiadc_device *adc_dev = iio_priv(indio_dev);
+
+	adc_dev->trigger_mode[channel] = mode;
+
+	return 0;
+}
+
+
+static const struct iio_enum channel_modes = {
+	.items = adc_channel_modes,
+	.num_items = ARRAY_SIZE(adc_channel_modes),
+	.get = adc_get_channel_mode,
+	.set = adc_set_channel_mode,
+};
+
+
+static const struct iio_chan_spec_ext_info adc_chan_ext_info[] = {
+	IIO_ENUM("trigger_mode", false, &channel_modes),
+	IIO_ENUM_AVAILABLE("trigger_mode", &channel_modes),
+	{ },
+};
+
 static int tiadc_channel_init(struct iio_dev *indio_dev, int channels)
 {
 	struct tiadc_device *adc_dev = iio_priv(indio_dev);
@@ -489,6 +533,7 @@ static int tiadc_channel_init(struct iio_dev *indio_dev, int channels)
 		chan->scan_type.sign = 'u';
 		chan->scan_type.realbits = 12;
 		chan->scan_type.storagebits = 16;
+		chan->ext_info = adc_chan_ext_info;
 	}
 
 	indio_dev->channels = chan_array;
@@ -571,7 +616,60 @@ err_unlock:
 	return ret;
 }
 
+
+///////////// GLOBAL DEVICE ATTRIBUTES ///////////////////
+
+char * hw_triggers[] = {"PRU", "TIMER4", "TIMER5", "TIMER6", "TIMER7",NULL};
+
+static ssize_t adc_hw_trigger_source_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	int event = event_mux_get_adc_event();
+    return sprintf(buf,"%s\n",hw_triggers[event]);
+}
+
+static ssize_t adc_hw_trigger_source_store(struct device *dev, struct device_attribute *attr,
+                      const char *buf, size_t count)
+{
+	int ok = 0;
+	int i;
+    for(i=0;i<5;i++)
+    {
+    	if(sysfs_streq(buf,hw_triggers[i]))
+    	{
+    		event_mux_set_adc_event(i);
+    		ok = 1;
+    		break;
+    	}
+    }
+    if(ok)
+    	return count;
+    
+    return -EINVAL;
+}
+
+static IIO_DEVICE_ATTR(hw_trigger_source, 0660, adc_hw_trigger_source_show, adc_hw_trigger_source_store, 0);
+
+static ssize_t adc_hw_trigger_source_available_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+    return sprintf(buf,"PRU, TIMER4, TIMER5, TIMER6, TIMER7\n");
+}
+
+static IIO_DEVICE_ATTR(hw_trigger_source_available,	S_IRUGO, adc_hw_trigger_source_available_show, NULL, 0);
+
+static struct attribute *adc_attributes[] = {
+	&iio_dev_attr_hw_trigger_source.dev_attr.attr,
+	&iio_dev_attr_hw_trigger_source_available.dev_attr.attr,
+	NULL,
+};
+
+static const struct attribute_group adc_attrs_group = {
+	.attrs = adc_attributes,
+};
+
 static const struct iio_info tiadc_info = {
+	.attrs = &adc_attrs_group,
 	.read_raw = &tiadc_read_raw,
 	.driver_module = THIS_MODULE,
 };
@@ -820,7 +918,7 @@ MODULE_DEVICE_TABLE(of, ti_adc_dt_ids);
 
 static struct platform_driver tiadc_driver = {
 	.driver = {
-		.name   = "my_am3359_adc",
+		.name   = "RTIO_ADC",
 		.pm	= &tiadc_pm_ops,
 		.of_match_table = ti_adc_dt_ids,
 	},

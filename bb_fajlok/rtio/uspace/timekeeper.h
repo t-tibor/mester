@@ -34,6 +34,7 @@ struct timekeeper
 	unsigned head, tail;
 	uint32_t sync_offset;
 	pthread_mutex_t lock;
+	uint64_t period;
 
 	struct servo *s;
 	enum servo_state state;
