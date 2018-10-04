@@ -18,7 +18,10 @@
 #include "icap_channel.h"
 #include "gpio.h"
 #include "./PPS_servo/BBonePPS.h"
+#include "./PPS_servo/PPS_servo.h"
 #include "adc.h"
+#include "circ_buf.h"
+#include "utils.h"
 
 //#define assert(x) {if(!(x)) {fprintf(stderr,"Assertion error. File:%s, Line:%d\n",__FILE__,__LINE__); while(1) sleep(1); }}
 
@@ -360,7 +363,7 @@ int init_dmtimer(struct dmtimer *t)
 {
 	int ret;
 	uint32_t tmp;
-	long rate, mult, div;
+	long mult, div;
 	int bit_cnt;
 
 	if(t->enabled == 0)
@@ -378,11 +381,12 @@ int init_dmtimer(struct dmtimer *t)
 		return -1;
 	}
 
+	t->clk_rate = timer_get_clk_freq(&t->dev);
+
 	if(t->enable_icap)
 	{
-		rate = timer_get_clk_freq(&t->dev);
 		mult = 1000000000;
-		div = rate;
+		div = t->clk_rate;
 		while( (mult%10 == 0) && (div%10==0))
 		{
 			mult /= 10; div /= 10;
@@ -403,7 +407,7 @@ int init_dmtimer(struct dmtimer *t)
 			fprintf(stderr,"Cannot open chanel %s.\n",t->icap_path);
 			dev_if_close(&t->dev);
 		}
-		fprintf(stderr,"Clock rate: %lu, mult: %lu, div: %lu\n",rate,mult,div);
+		fprintf(stderr,"Clock rate: %u, mult: %lu, div: %lu\n",t->clk_rate,mult,div);
 	}
 	else
 		t->channel.fdes = -1;
@@ -655,6 +659,19 @@ void close_ecap(struct ecap_timer *e)
 	dev_if_close(&e->dev);
 }
 
+int ecap_set_prescaler(struct ecap_timer *e, unsigned char presc)
+{
+	uint32_t reg;
+
+	if(!e || !e->enabled || presc==0 || presc>62 || (presc%2==1 && presc!=1))
+		return -1;
+
+	reg = read32(e->dev.base, ECAP_ECCTL1);
+	reg &= ~((uint32_t) 0x3e00);
+	reg |= ((uint16_t)(presc/2)) << ECCTL1_PRESCALE_OFFSET;
+	write32(e->dev.base,ECAP_ECCTL1,reg);
+	return 0;
+}
 
 
 // <------------------------------------------------------------------------------>
@@ -779,11 +796,19 @@ void *timekeeper_worker(void *arg)
 	next_ts = ts_period = (0xFFFFFFFF - trigger_timer->load)+1;
 
 
+	ptp_disable_hwts();
+
 	// enable timer HW_TS push events
 	if(ptp_enable_hwts())
 	{
 		fprintf(stderr,"Cannot enable HWTS generation.\n");
 		return NULL;
+	}
+
+	// increate thread priority
+	if(goto_rt_level(TIMEKEEPER_RT_PRIO))
+	{
+		fprintf(stderr,"[ERROR] Cannot increase timekeeper rt priority.\n");
 	}
 
 	while(!rtio_quit)
@@ -1053,9 +1078,6 @@ do
 	return NULL;
 }
 */
-
-
-void *pps_servo_worker(void *arg);
 
 //******************************************************************************//
 //******************************** ADC HANDLERS ********************************//
@@ -1546,9 +1568,8 @@ int start_icap_logging(int timer_idx)
 	return 0;
 }
 
-
 struct PPS_servo_t pps;
-int start_pps_generator(int icap_timer_idx, int pwm_timer_idx)
+int start_npps_generator(int icap_timer_idx, int pwm_timer_idx, uint32_t pps_period_ms, uint32_t hw_prescaler, int verbose_level)
 {
 	struct icap_channel *c;
 	struct dmtimer *d;
@@ -1573,17 +1594,49 @@ int start_pps_generator(int icap_timer_idx, int pwm_timer_idx)
 		return -1;
 	}
 
+	if(pps_period_ms < 10 || pps_period_ms > 1000)
+	{
+		fprintf(stderr,"Unsupported pps period %d. Valid region: 10ms - 1sec.\n",pps_period_ms);
+		return -1;
+	}
+
+	if(hw_prescaler == 0 || hw_prescaler > 62 || (hw_prescaler%2==1 && hw_prescaler!=1))
+	{
+		fprintf(stderr,"Invalid hw prescaler: %d. Give an even number (or 1) between 1-62.\n",hw_prescaler);
+		return -1;
+	}
+
+	if(hw_prescaler != 1 && icap_timer_idx != 0 && icap_timer_idx != 2)
+	{
+		fprintf(stderr,"Clock divigin is only supported on the eCAP peripherals.\n");
+		return -1;
+	}
+
+	if(hw_prescaler > 1)
+	{
+		if(ecap_set_prescaler(&ecaps[icap_timer_idx],hw_prescaler))
+		{
+			fprintf(stderr,"Cannot set hw prescaler for eCAP.\n");
+			return -1;
+		}
+	}
+
+
 	pps.feedback_channel = c;	
-	pps.pwm_gen = d;					
-// setup pwm gen timer
-	dmtimer_pwm_setup(pps.pwm_gen,24000000,30);
-	dmtimer_set_pin_dir(pps.pwm_gen,0);
-	dmtimer_start_timer(pps.pwm_gen);
+	pps.pwm_gen = d;
+	pps.period_ms = pps_period_ms;
+	pps.hw_prescaler = hw_prescaler;
+	pps.verbose_level = verbose_level;
 
-	fprintf(stderr,"Starting PPS generation on %s using icap channel %s as feedback.\n",d->name, c->dev_path);
+	fprintf(stderr,"Starting PPS generation on %s using icap channel %s as feedback.\nnPPS period: %dms, hw prescale rate: %d.\n",d->name, c->dev_path,pps_period_ms, hw_prescaler);
 
-	err = pthread_create(&workers[worker_cnt++], NULL, pps_servo_worker, (void*)&pps);
+	err = pthread_create(&workers[worker_cnt++], NULL, pps_worker, (void*)&pps);
 	if(err)
 		fprintf(stderr,"Cannot start the PPS servo thread.\n");
 	return 0;
+}
+
+int start_pps_generator(int icap_timer_idx, int pwm_timer_idx)
+{
+	return start_npps_generator(icap_timer_idx, pwm_timer_idx, 1000, 1, 2);
 }

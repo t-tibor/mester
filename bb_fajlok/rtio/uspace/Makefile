@@ -4,10 +4,10 @@ CFLAGS=-Wall -Wextra -ggdb
 ODIR=bin
 
 
-SERVO_TEST_SRC := servo_test.c timekeeper.c timekeeper.h
-ICAP_SRC := icap_channel.c icap_channel.h icap_channel_API.h gpio.c gpio.h timekeeper.c timekeeper.h ./PPS_servo/PPS_servo.c  adc.c adc.h
-SERVO_SRC := ./servo/servo.c ./servo/pi.c ./servo/linreg.c ./servo/print.c
-LIBS := -lm -lpthread
+SERVO_TEST_SRC := servo_test.c timekeeper.c timekeeper.h utils.c utils.h
+ICAP_SRC := icap_channel.c icap_channel.h icap_channel_API.h gpio.c gpio.h timekeeper.c timekeeper.h ./PPS_servo/PPS_servo.c  adc.c adc.h circ_buf.h circ_buf.c utils.c utils.h
+SERVO_SRC := ./servo/servo.c ./servo/pi.c ./servo/linreg.c ./servo/print.c circ_buf.c circ_buf.h utils.c utils.h
+LIBS := -lm -lpthread -lrt
 
 %.o : %.c
 	$(CC) $(CFLAGS)  -c $< -o $@ $(LIBS)
@@ -18,14 +18,14 @@ $(ODIR)/servo_test: $(SERVO_TEST_SRC) $(SERVO_SRC)
 
 
 $(ODIR)/event_logger: $(ICAP_SRC)  $(SERVO_SRC) event_logger.c
-	$(BB_CC) $(CFLAGS) $(LIBS) -o $@  $^ 
+	$(BB_CC) $(CFLAGS) -o $@  $^  $(LIBS) 
 
 
 $(ODIR)/PPS_generator: $(ICAP_SRC)  $(SERVO_SRC) pps_generator.c
-	$(BB_CC) $(CFLAGS) $(LIBS) -o $@  $^ 
+	$(BB_CC) $(CFLAGS) -o $@  $^   $(LIBS) 
 
 $(ODIR)/PPS_tester: $(ICAP_SRC)  $(SERVO_SRC) pps_tester.c
-	$(BB_CC) $(CFLAGS) $(LIBS) -o $@  $^ 
+	$(BB_CC) $(CFLAGS)  -o $@  $^  $(LIBS)
 
 
 

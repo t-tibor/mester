@@ -1,18 +1,31 @@
 #include <inttypes.h>
 #include <string.h>
+#include <pthread.h>
 
 #include "timekeeper.h"
+#include "utils.h"
 
 //#define VERBOSE 
+void *tk_logger(void*arg);
 
 struct timekeeper* timekeeper_create(int servo_type, double sync_interval, uint32_t sync_offset, const char *log_name)
 {
 	struct timekeeper *ret;
 	enum servo_type st;
+	pthread_mutexattr_t mattr;
+	int err;
 
 	ret = (struct timekeeper*)malloc(sizeof(struct timekeeper));
 	if(!ret)
 		return NULL;
+
+	ret->log_buf = circ_buf_create(32,sizeof(struct sync_point_t));
+	if(!ret->log_buf)
+	{
+		free(ret);
+		return NULL;
+	}
+
 
 	switch(servo_type)
 	{
@@ -35,7 +48,8 @@ struct timekeeper* timekeeper_create(int servo_type, double sync_interval, uint3
 	servo_sync_interval(ret->s, sync_interval);
 	servo_reset(ret->s);
 
-	if(pthread_mutex_init(&ret->lock, NULL) != 0)
+	pthread_mutexattr_setprotocol(&mattr, PTHREAD_PRIO_INHERIT);
+	if(pthread_mutex_init(&ret->lock, &mattr) != 0)
 	{
 		servo_destroy(ret->s);
 		free(ret);
@@ -50,19 +64,29 @@ struct timekeeper* timekeeper_create(int servo_type, double sync_interval, uint3
 
 	memset(&ret->sync_points[0],0,sizeof(struct sync_point_t));
 	ret->sync_points[0].local_ts = sync_offset;
-
-	if(log_name)
+	
+	ret->log_name = log_name;
+	err = pthread_create(&ret->logger_thread, NULL, tk_logger, (void*)ret);
+	if(err)
 	{
-		ret->log = fopen(log_name,"w");
+		fprintf(stderr,"Cannot start the timekeeper logger thread.\n");
+		servo_destroy(ret->s);
+		free(ret);
+		return NULL;
 	}
+
 	return ret;
 }
 
 void timekeeper_destroy(struct timekeeper* tk)
 {
+	void *tmp;
 	if(!tk) return;
-	if(tk->log)
-		fclose(tk->log);
+
+	// wake logger thread
+	circ_buf_wake_consumer(tk->log_buf);
+	pthread_join(tk->logger_thread,&tmp);
+	circ_buf_destroy(tk->log_buf);
 
 	pthread_mutex_destroy(&tk->lock);
 	servo_destroy(tk->s);
@@ -142,6 +166,7 @@ int timekeeper_add_sync_point(struct timekeeper *tk, uint64_t local_ts, uint64_t
 	// save the measured timestamps for logging
 	new_sp->ptp_local = local_ts;
 	new_sp->ptp_global = ptp_ts;
+	new_sp->ptp_global_est = glob_est;
 	// save the sync point timestamps
 	new_sp->local_ts = local_ts + tk->sync_offset;
 
@@ -180,6 +205,10 @@ int timekeeper_add_sync_point(struct timekeeper *tk, uint64_t local_ts, uint64_t
 	tk->tail = new_tail;
 	pthread_mutex_unlock(&tk->lock);
 
+
+	circ_buf_push(tk->log_buf, new_sp);
+
+
 #ifdef VERBOSE
 	fprintf(stdout,"New sync point:\n"
 					"\tlocal time:           %"PRIu64"\n"
@@ -193,8 +222,44 @@ int timekeeper_add_sync_point(struct timekeeper *tk, uint64_t local_ts, uint64_t
 					"\tServo state: %d\n" ,new_sp->ptp_local, glob_est, new_sp->ptp_global, offset, adj,-last_sp->adj*1e9, new_sp->local_ts, new_sp->global_ts,tk->state);
 #endif
 
-	fprintf(tk->log,"%"PRIu64",%"PRIu64",%"PRIu64",%lf\n",ptp_ts,local_ts,glob_est,adj);
+	
 
 	return 0;
+}
+
+
+
+void *tk_logger(void*arg)
+{
+	struct timekeeper *tk = (struct timekeeper*)arg;
+	struct circ_buf *log_buf = tk->log_buf;
+	struct sync_point_t sp;
+	FILE *fout;
+
+	if(goto_rt_level(TIMEKEEPER_LOGGER_RT_PRIO))
+		fprintf(stderr,"[ERROR] Cannot increase timekeeper logger rt priority.\n");
+
+	fout = fopen(tk->log_name,"w");
+	if(!fout)
+	{
+		fprintf(stderr,"Cannot open timekeeper log file.\n");
+		return NULL;
+	}
+
+	fprintf(stdout,"Timekeeper logger started.\n");
+
+	// print header
+	fprintf(fout,"PTP_timestamp, Local_timestamp, Global_timestamp_estimation\n");
+
+
+	while(!circ_buf_pop(log_buf,&sp))
+	{
+		fprintf(fout,"%"PRIu64",%"PRIu64",%"PRIu64",%lf\n",sp.ptp_global,sp.ptp_local,sp.ptp_global_est,sp.adj*1e9);
+	}
+	fclose(fout);
+
+	fprintf(stdout,"Timekeeper logger finished.\n");
+
+	return NULL;
 }
 

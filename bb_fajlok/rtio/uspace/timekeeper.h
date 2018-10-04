@@ -9,6 +9,11 @@
 #include "./servo/config.h"
 #include "./servo/servo.h"
 #include "./servo/pi.h"
+#include "./circ_buf.h"
+
+
+#define TIMEKEEPER_RT_PRIO			20
+#define TIMEKEEPER_LOGGER_RT_PRIO	1
 
 
 struct sync_point_t
@@ -20,6 +25,7 @@ struct sync_point_t
 	// sync event = CPTS HW PUSH event
 	uint64_t ptp_local;		// local timestamp of the sync event
 	uint64_t ptp_global;	// ptp timestamp of the sync event
+	uint64_t ptp_global_est;
 };
 
 
@@ -39,7 +45,9 @@ struct timekeeper
 	struct servo *s;
 	enum servo_state state;
 
-	FILE *log;
+	pthread_t logger_thread;
+	const char *log_name;
+	struct circ_buf *log_buf;
 };
 
 struct timekeeper* timekeeper_create(int servo_type, double sync_interval, uint32_t sync_offset, const char *log_name);

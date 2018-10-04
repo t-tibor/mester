@@ -125,6 +125,7 @@ struct dmtimer
 
 	int 								enabled;
 	enum timer_clk_source_t 			clk_source;
+	uint32_t 							clk_rate;
 	uint32_t							load;
 	uint32_t							match;
 	int 								enable_oc;
@@ -151,12 +152,6 @@ struct ecap_timer
 
 };
 
-// pps signal 
-struct PPS_servo_t
-{
-	struct icap_channel *feedback_channel;
-	struct dmtimer *pwm_gen;
-};
 
 
 //adc
@@ -193,6 +188,10 @@ int init_dmtimer(struct dmtimer *t);
 void close_dmtimer(struct dmtimer *t);
 int dmtimer_pwm_apply_offset(struct dmtimer *t, int32_t offset);
 int dmtimer_pwm_set_period(struct dmtimer *t, uint32_t period);
+int dmtimer_pwm_setup(struct dmtimer *t, uint32_t period, uint32_t duty);
+int dmtimer_set_pin_dir(struct dmtimer *t, uint8_t dir);
+void dmtimer_start_timer(struct dmtimer *t);
+void dmtimer_stop_timer(struct dmtimer *t);
 
 
 // structures for the pps generation

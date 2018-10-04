@@ -65,9 +65,16 @@ struct DMTimer_priv
 	struct miscdevice misc;
 	struct platform_device *pdev;
 
+	uint32_t ovf_counter;
+	wait_queue_head_t wq;	// wait queue for ovf events
+
 	char * icap_channel_name;
 	struct icap_channel *icap;
 };
+
+int irq_enable_ovf_wake = 0;
+module_param(irq_enable_ovf_wake, int, S_IRUGO | S_IWUGO);
+MODULE_PARM_DESC(irq_enable_ovf_wake, "Enable waking from hard irq context at timer overflow events");
 
 
 // <------------------- CLOCK SOURCE SETTINGS ------------------->
@@ -196,6 +203,16 @@ static int timer_cdev_mmap(struct file *filep, struct vm_area_struct *vma)
 	return 0;
 }
 
+int wait_for_next_ovf(struct DMTimer_priv *timer)
+{
+	uint32_t ovf_start = READ_ONCE(timer->ovf_counter);
+
+	if(wait_event_interruptible(timer->wq, (READ_ONCE(timer->ovf_counter) != ovf_start)))
+		return -ERESTARTSYS;
+
+	return 0;
+}
+
 
 #define TIMER_IOCTL_MAGIC	'-'
 
@@ -203,8 +220,9 @@ static int timer_cdev_mmap(struct file *filep, struct vm_area_struct *vma)
 #define IOCTL_SET_CLOCK_SOURCE 		_IO(TIMER_IOCTL_MAGIC,2)
 #define IOCTL_SET_ICAP_SOURCE 		_IO(TIMER_IOCTL_MAGIC,3)
 #define IOCTL_GET_CLK_FREQ			_IO(TIMER_IOCTL_MAGIC,4)
+#define IOCTL_WAIT_OVF				_IO(TIMER_IOCTL_MAGIC,5)
 
-#define TIMER_IOCTL_MAX				4
+#define TIMER_IOCTL_MAX				5
 
 
 static long timer_cdev_ioctl(struct file *pfile, unsigned int cmd, unsigned long arg)
@@ -230,6 +248,9 @@ static long timer_cdev_ioctl(struct file *pfile, unsigned int cmd, unsigned long
 			break;
 		case IOCTL_GET_CLK_FREQ:
 			ret = clk_get_rate(timer->fclk);
+			break;
+		case IOCTL_WAIT_OVF:
+			ret = wait_for_next_ovf(timer);
 			break;
 		default:
 			dev_err(&timer->pdev->dev,"Invalid IOCTL command : %d.\n",cmd);
@@ -267,13 +288,18 @@ static irqreturn_t timer_irq_handler(int irq, void *data)
 		icap_add_ts(timer->icap,ts,irq_status & OVF_IT_FLAG);
 	}
 
+	// clear interrupt flag
+	writel(irq_status,timer->io_base + TIMER_IRQSTATUS_OFFSET);
+
+
 	if(irq_status & OVF_IT_FLAG)
 	{
+		WRITE_ONCE(timer->ovf_counter, timer->ovf_counter+1);
 		icap_signal_timer_ovf(timer->icap);
 	}
 
-		// clear interrupt flag
-	writel(irq_status,timer->io_base + TIMER_IRQSTATUS_OFFSET);
+	if(timer->irq_enable_ovf_wake == 1)
+		wake_up_interruptible(&timer->wq);
 
 	return IRQ_HANDLED;
 }
@@ -368,7 +394,7 @@ static int timer_probe(struct platform_device *pdev)
 	{
 
 		timer->icap_channel_name = devm_kasprintf(&pdev->dev, GFP_KERNEL, "%s%d_icap","dmtimer",timer_idx);
-		timer->icap = icap_create_channel(timer->icap_channel_name,13);
+		timer->icap = icap_create_channel(timer->icap_channel_namel,13);
 		if(!timer->icap)
 		{
 			dev_err(&pdev->dev,"Cannot initialize icap channel: /dev/%s.\n",timer->misc.name);
@@ -398,6 +424,8 @@ static int timer_probe(struct platform_device *pdev)
 	 	timer->irq = -1;
 	 }
 
+	timer->ovf_counter = 0;
+	init_waitqueue_head(&timer->wq);
 
 	dev_info(&pdev->dev,"%s initialization succeeded.\n",timer->name);
 	dev_info(&pdev->dev,"Base address: 0x%lx, length: %u, irq num: %d, icap channel %s.\n",timer->regspace_phys_base,timer->regspace_size,timer->irq, (timer->icap) ? "enabled" : "disabled");
