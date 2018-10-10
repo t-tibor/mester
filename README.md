@@ -1,7 +1,9 @@
 ## Important files
 
-- ./bb_fajlok/BBonePPS/src:				Source code of the PPS generator user space program
-- ./bb_fajlok/device_tree_overlay: 		Overlay for the pin configuration
-- ./bb_fajlok/ptp4l: 						ptp4l init script
-- ./bb_fajlok/ptp4l.conf: 				ptp4l configuration template
-- ./bb_fajlok/kernel_patching/my_ker...	Update script that copies the files of the new kernel to their location
+- 01_device_tree_overlays: Overlays for pin configuration and for dmtimer/ecap setups.
+- 02_kernel_patching: New kernel installer script.
+- 03_measurements: Measurement data evaluation scripts.
+- 04_rtio: time servo, timekeeper, (n)PPS generator, event capturer source code
+- PREEMPT_RT: rt patch specific files
+- real_time_sched: periodis rt task compatible with normal and RT patched kernels
+- xenomai: yenomai specific files, periodic xenomai task
