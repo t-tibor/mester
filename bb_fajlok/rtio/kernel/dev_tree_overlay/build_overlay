@@ -1,4 +1,0 @@
-#!/bin/bash
-
-echo "Compiling the overlay from .dts to .dtbo"
-dtc -O dtb -o BB-RTIO-EXT.dtbo -b 0 -@ BB-RTIO-EXT.dts && echo "OK!"
