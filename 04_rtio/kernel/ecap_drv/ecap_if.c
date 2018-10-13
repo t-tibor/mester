@@ -31,6 +31,63 @@
 #include "../icap_channel/icap_channel.h"
 
 
+// 4.4 and 4.12 kernels behave differently:
+// @ 4.4 kernel the eCAP clock is disabled after the driver swap, so it has to be enabled,
+// by using the appropriate function of the pwmss parent module.
+#define OLD_KERNEL
+
+#ifdef OLD_KERNEL
+#include <linux/mutex.h>
+
+	// copied from /drivers/pwm/pwm-tipwmss.h
+	#define PWMSS_ECAPCLK_EN	BIT(0)
+	#define PWMSS_ECAPCLK_STOP_REQ	BIT(1)
+	#define PWMSS_EPWMCLK_EN	BIT(8)
+	#define PWMSS_EPWMCLK_STOP_REQ	BIT(9)
+
+	#define PWMSS_ECAPCLK_EN_ACK	BIT(0)
+	#define PWMSS_EPWMCLK_EN_ACK	BIT(8)
+
+	#define PWMSS_CLKCONFIG		0x8	/* Clock gating reg */
+	#define PWMSS_CLKSTATUS		0xc	/* Clock gating status reg */
+
+	struct pwmss_info {
+		void __iomem	*mmio_base;
+		struct mutex	pwmss_lock;
+		u16		pwmss_clkconfig;
+	};
+	u16 pwmss_enable_ecap_clk(struct device *dev)
+	{
+		struct pwmss_info *info = dev_get_drvdata(dev);
+		u16 val;
+
+		mutex_lock(&info->pwmss_lock);
+		val = readw(info->mmio_base + PWMSS_CLKCONFIG);
+		val &= ~((u32)0x3);
+		val |= PWMSS_ECAPCLK_EN;
+		writew(val , info->mmio_base + PWMSS_CLKCONFIG);
+		mutex_unlock(&info->pwmss_lock);
+
+		return readw(info->mmio_base + PWMSS_CLKSTATUS);
+	}
+
+	u16 pwmss_disable_ecap_clk(struct device *dev)
+	{
+		struct pwmss_info *info = dev_get_drvdata(dev);
+		u16 val;
+
+		mutex_lock(&info->pwmss_lock);
+		val = readw(info->mmio_base + PWMSS_CLKCONFIG);
+		val &= ~((u32)0x3);
+		val |= PWMSS_ECAPCLK_STOP_REQ;
+		writew(val , info->mmio_base + PWMSS_CLKCONFIG);
+		mutex_unlock(&info->pwmss_lock);
+
+		return readw(info->mmio_base + PWMSS_CLKSTATUS);
+	}
+#endif
+
+
 // DMTimer register offsets
 #define ECAP_TSCTR					0x00
 #define ECAP_CTRPHS			 		0x04
@@ -360,6 +417,12 @@ static int ecap_probe(struct platform_device *pdev)
  		dev_err(&pdev->dev,"[%s:%d] Cannot resume the ecap.\n",__FUNCTION__,__LINE__);
  	}
 
+ 	#ifdef OLD_KERNEL
+ 		ret = pwmss_enable_ecap_clk(pdev->dev.parent);
+ 		if(!(ret & PWMSS_ECAPCLK_EN_ACK))
+ 			dev_err(&pdev->dev,"Cannot enable eCAP clock.\n");
+ 	#endif
+
 
  	return 0;
 
@@ -369,6 +432,10 @@ static int ecap_remove(struct platform_device *pdev)
 {
 	struct ecap_priv *ecap;
 	ecap = platform_get_drvdata(pdev);
+
+	#ifdef OLD_KERNEL
+		pwmss_disable_ecap_clk(pdev->dev.parent);
+	#endif
 
 	// stop the ecap interface clock
 	pm_runtime_put_sync(&pdev->dev);

@@ -10,7 +10,7 @@
 #include <linux/sysfs.h>
 #include <linux/of.h>
 #include <linux/of_irq.h>
-#include <linux/of_address.h>l
+#include <linux/of_address.h>
 #include <linux/ioport.h>
 #include <linux/slab.h>
 #include <linux/clk-provider.h>
@@ -32,8 +32,8 @@
 
 
 #ifdef USE_XENOMAI
-#include <xenomai/rtdm/driver.h>
-#include <xenomai/rtdm/udd.h>
+#include <rtdm/driver.h>
+#include <rtdm/udd.h>
 #endif
 
 // DMTimer register offsets
@@ -71,19 +71,15 @@ struct DMTimer_priv
 	struct platform_device *pdev;
 
 	uint32_t ovf_counter;
-	wait_queue_head_t wq;	// wait queue for ovf events
 
 	char * icap_channel_name;
 	struct icap_channel *icap;
 
 	#ifdef USE_XENOMAI
-	struct udd_device *udd;
+	struct udd_device udd;
+	int udd_registered;
 	#endif
 };
-
-int irq_enable_ovf_wake = 0;
-module_param(irq_enable_ovf_wake, int, S_IRUGO | S_IWUGO);
-MODULE_PARM_DESC(irq_enable_ovf_wake, "Enable waking from hard irq context at timer overflow events");
 
 
 // <------------------- CLOCK SOURCE SETTINGS ------------------->
@@ -212,16 +208,6 @@ static int timer_cdev_mmap(struct file *filep, struct vm_area_struct *vma)
 	return 0;
 }
 
-int wait_for_next_ovf(struct DMTimer_priv *timer)
-{
-	uint32_t ovf_start = READ_ONCE(timer->ovf_counter);
-
-	if(wait_event_interruptible(timer->wq, (READ_ONCE(timer->ovf_counter) != ovf_start)))
-		return -ERESTARTSYS;
-
-	return 0;
-}
-
 
 #define TIMER_IOCTL_MAGIC	'-'
 
@@ -229,9 +215,8 @@ int wait_for_next_ovf(struct DMTimer_priv *timer)
 #define IOCTL_SET_CLOCK_SOURCE 		_IO(TIMER_IOCTL_MAGIC,2)
 #define IOCTL_SET_ICAP_SOURCE 		_IO(TIMER_IOCTL_MAGIC,3)
 #define IOCTL_GET_CLK_FREQ			_IO(TIMER_IOCTL_MAGIC,4)
-#define IOCTL_WAIT_OVF				_IO(TIMER_IOCTL_MAGIC,5)
 
-#define TIMER_IOCTL_MAX				5
+#define TIMER_IOCTL_MAX				4
 
 
 static long timer_cdev_ioctl(struct file *pfile, unsigned int cmd, unsigned long arg)
@@ -258,9 +243,6 @@ static long timer_cdev_ioctl(struct file *pfile, unsigned int cmd, unsigned long
 		case IOCTL_GET_CLK_FREQ:
 			ret = clk_get_rate(timer->fclk);
 			break;
-		case IOCTL_WAIT_OVF:
-			ret = wait_for_next_ovf(timer);
-			break;
 		default:
 			dev_err(&timer->pdev->dev,"Invalid IOCTL command : %d.\n",cmd);
 			ret = -ENOTTY;
@@ -282,7 +264,7 @@ static struct file_operations timer_cdev_fops =
 
 /********************* RTDM driver user interface ************************/
 
-
+#ifdef USE_XENOMAI
 static int xeno_open(struct rtdm_fd *fd, int oflags)
 {
 	return 0;
@@ -294,9 +276,9 @@ static void xeno_close(struct rtdm_fd *fd)
 }
 
 
-int xeno_irq_handler(struct udd_device *udd)
+int xeno_irq_handler(struct udd_device *arg)
 {
-	struct DMTimer_priv *timer = container_of(udd,struct DMTimer_priv, udd);
+	struct DMTimer_priv *timer = container_of(arg,struct DMTimer_priv, udd);
 
 	u32 irq_status;
 	// clear pending irq request
@@ -305,9 +287,7 @@ int xeno_irq_handler(struct udd_device *udd)
 
 	return RTDM_IRQ_HANDLED;
 }
-
-
-
+#endif
 
 
 // normal linux irq handler
@@ -320,11 +300,9 @@ static irqreturn_t icap_irq_handler(int irq, void *data)
 
 	irq_status = readl(timer->io_base + TIMER_IRQSTATUS_OFFSET);
 
-
 	if(irq_status & TCAR_IT_FLAG)
 	{
 		ts = readl(timer->io_base + TIMER_TCAR1_OFFSET);
-
 		icap_add_ts(timer->icap,ts,irq_status & OVF_IT_FLAG);
 	}
 
@@ -341,13 +319,11 @@ static irqreturn_t icap_irq_handler(int irq, void *data)
 }
 
 
-
-
-
-
 // basic mmap-able character device to use from normal linux user space
 int init_basic_interface(struct DMTimer_priv *timer)
 {
+	struct platform_device *pdev = timer->pdev;
+
 	timer->misc.fops = &timer_cdev_fops;
 	timer->misc.minor = MISC_DYNAMIC_MINOR;
 	timer->misc.name =timer->name;
@@ -357,6 +333,7 @@ int init_basic_interface(struct DMTimer_priv *timer)
 		dev_err(&pdev->dev,"Couldn't initialize miscdevice /dev/%s.\n",timer->misc.name);
 		return -ENODEV;
 	}
+	return 0;
 }
 
 void destroy_basic_interface(struct DMTimer_priv *timer)
@@ -368,8 +345,10 @@ void destroy_basic_interface(struct DMTimer_priv *timer)
 int init_icap_interface(struct DMTimer_priv *timer)
 {
 	struct platform_device *pdev = timer->pdev;
+	char *irq_name;
+	int ret;
 
-	timer->icap_channel_name = devm_kasprintf(&pdev->dev, GFP_KERNEL, "%s%d_icap","dmtimer",timer->timer_idx);
+	timer->icap_channel_name = devm_kasprintf(&pdev->dev, GFP_KERNEL, "%s%d_icap","dmtimer",timer->idx);
 	timer->icap = icap_create_channel(timer->icap_channel_name,13);
 	if(!timer->icap)
 	{
@@ -377,39 +356,49 @@ int init_icap_interface(struct DMTimer_priv *timer)
 		return -ENOMEM;
 	}
 
-	 // remapping irq
- 	irq_name = devm_kasprintf(&pdev->dev, GFP_KERNEL, "%s%d_irq", dev_name(&pdev->dev),timer->timer_idx);
+	// remapping irq
+ 	irq_name = devm_kasprintf(&pdev->dev, GFP_KERNEL, "%s%d_irq", dev_name(&pdev->dev),timer->idx);
  	ret = devm_request_irq(&pdev->dev,timer->irq,icap_irq_handler,0,irq_name,timer);
  	if(unlikely(ret))
  	{
  		dev_err(&pdev->dev, "%s:%d Interrupt allocation (irq:%d) failed [%d].\n", __func__,__LINE__,timer->irq,ret);
  		icap_delete_channel(timer->icap);
+ 		timer->icap = NULL;
 		return -ENXIO;
  	}
+ 	return 0;
+}
+
+static void destroy_icap_interface(struct DMTimer_priv *timer)
+{
+	struct platform_device *pdev = timer->pdev;
+
+	if(!timer->icap) return;
+
+	devm_free_irq(&pdev->dev, timer->irq, timer);
+	icap_delete_channel(timer->icap);
+
+	timer->icap = NULL;
 }
 
 // init additional rtdm udd interface
 int init_xeno_interface(struct DMTimer_priv *timer)
 {
-	struct udd_device *udd;
+#ifdef USE_XENOMAI
+	struct udd_device *udd = &timer->udd;
 	int ret;
 
-	udd = (struct udd_device*)devm_kzalloc(&timer->pdev->dev,sizeof(struct udd_device),GFP_KERNEL);
-	if(!udd)
-		return -ENOMEM;
-	timer->udd = udd;
-
 	// add interface caééback functions
-	udd->device_flags = RTDM_NAMED_DEVICE;
-	udd->device_name = timer->name;
-	udd->ops.close = xeno_close;
-	udd->ops.open = xeno_open;
-	udd->ops.mmap = NULL;
+	udd->device_flags 	= RTDM_NAMED_DEVICE;
+	udd->device_name 	= timer->name;
+	udd->ops.close 		= xeno_close;
+	udd->ops.open 		= xeno_open;
+	udd->ops.interrupt 	= xeno_irq_handler; 
 
 	// add memory regions
 	udd->mem_regions[0].name = "timer_regs";
 	udd->mem_regions[0].addr = timer->regspace_phys_base;
-	udd->mem_regions[0].len = timer->regspace_size;
+	udd->mem_regions[0].len  = timer->regspace_size;
 	udd->mem_regions[0].type = UDD_MEM_PHYS;
 	// let the udd core handle the interrupts
 	udd->irq = timer->irq;
@@ -417,9 +406,29 @@ int init_xeno_interface(struct DMTimer_priv *timer)
 	ret = udd_register_device(udd);
 	if(ret)
 	{
-		dev_err(&timer->pdev.dev, "%s:%d Cannot initialize UDD interface for dmtimer %d.\n", __func__,__LINE__,timer->idx);
+		dev_err(&timer->pdev->dev, "%s:%d Cannot initialize UDD interface for dmtimer %d.\n", __func__,__LINE__,timer->idx);
 	}
+	else
+	{
+		timer->udd_registered = 1;
+	}
+
 	return ret;
+
+#else
+	return -1;
+#endif
+}
+
+static void destroy_xeno_interface(struct DMTimer_priv *timer)
+{
+#ifdef USE_XENOMAI
+	if(timer->udd_registered == 1)
+	{
+		udd_unregister_device(&timer->udd);
+		timer->udd_registered = 0;
+	}
+#endif
 }
 
 
@@ -430,8 +439,17 @@ static int parse_dt(struct platform_device *pdev, struct DMTimer_priv *timer)
 	struct resource *mem, *irq;
 	struct clk *fclk;
 	void __iomem *io_base;	
+	int timer_idx;
+	const char *timer_name;
 
-	// timer is valid, so lets get its resources
+	of_property_read_string_index(of_node, "ti,hwmods", 0, &timer_name);
+	sscanf(timer_name, "timer%d", &timer_idx);
+	if(timer_idx < 4 || timer_idx > 7) 
+	{
+		dev_err(&pdev->dev,"%s:%d: Invalid timer index found in the device tree: %d\n",__func__, __LINE__, timer_idx);
+		return -EINVAL;
+	}
+
 
 	irq = platform_get_resource(pdev,IORESOURCE_IRQ,0);
 	if(unlikely( NULL  ==  irq))
@@ -466,7 +484,7 @@ static int parse_dt(struct platform_device *pdev, struct DMTimer_priv *timer)
 	timer->name = devm_kasprintf(&pdev->dev, GFP_KERNEL, "DMTimer%d",timer_idx);
 	timer->idx = timer_idx;
 	timer->irq = irq->start;
-	timer->clk = fclk;
+	timer->fclk = fclk;
 
 	timer->io_base = io_base;
 	timer->regspace_phys_base = mem->start;
@@ -481,22 +499,11 @@ static int parse_dt(struct platform_device *pdev, struct DMTimer_priv *timer)
 static int timer_probe(struct platform_device *pdev)
 {
 	struct DMTimer_priv *timer;
-	const char *timer_name;
-	int timer_idx;
 
 	uint8_t icap_mode;
 	uint8_t pwm_mode;
 	int ret;
 
-
-	// read up timer index
-	of_property_read_string_index(of_node, "ti,hwmods", 0, &timer_name);
-	sscanf(timer_name, "timer%d", &timer_idx);
-	if(timer_idx < 4 || timer_idx > 7) 
-	{
-		pr_err("Invalid timer index found in the device tree: %d\n",timer_idx);
-		return -EINVAL;
-	}
 
 	icap_mode = 0;
 	pwm_mode = 0;
@@ -507,22 +514,22 @@ static int timer_probe(struct platform_device *pdev)
 	if (of_get_property(pdev->dev.of_node, "ext,pwm-mode", NULL)) 
 		pwm_mode = 1;
 
-	if(1 == pwm_mode && 1 == icap_mode)
+	if((1 == pwm_mode) && (1 == icap_mode))
 	{
-		pr_err("Cannot set both icap and pwm mode on dmtimer %d.\n",timer_idx);
+		dev_err(&pdev->dev,"%s:%d: Cannot set both icap and pwm mode on dmtimer.\n",__func__,__LINE__);
 		return -EINVAL;
 	}
 
 	// alloc private descriptor struct
-	timer = devm_kzalloc(&pdev->dev,sizeof(struct DMTimer_priv),GFP_KERNEL);
+	timer = (struct DMTimer_priv*)devm_kzalloc(&pdev->dev,sizeof(struct DMTimer_priv),GFP_KERNEL);
 	if(!timer)
 	{
 		dev_err(&pdev->dev,"%s:%d: Cannot allocate memory.\n",__func__,__LINE__);
 		return -ENOMEM;
 	}
 	
-	ret = parse_dt(pdev);
-	if(!timer)
+	ret = parse_dt(pdev,timer);
+	if(ret)
 		return -ENODEV;
 	
 
@@ -551,7 +558,7 @@ static int timer_probe(struct platform_device *pdev)
 
 
 	dev_info(&pdev->dev,"%s initialization succeeded.\n",timer->name);
-	dev_info(&pdev->dev,"Base address: 0x%lx, length: %u, irq num: %d, icap channel %s, pwm channel %s.\n",timer->regspace_phys_base,timer->regspace_size,timer->irq, (timer->icap) ? "enabled" : "disabled", (timer->udd) ? "enabled" : "disabled");
+	dev_info(&pdev->dev,"Base address: 0x%lx, length: %u, irq num: %d, icap channel %s, pwm channel %s.\n",timer->regspace_phys_base,timer->regspace_size,timer->irq, (timer->icap) ? "enabled" : "disabled", (timer->udd_registered) ? "enabled" : "disabled");
 
  	platform_set_drvdata(pdev,timer);
 
@@ -576,23 +583,13 @@ static int timer_remove(struct platform_device *pdev)
 	pm_runtime_put_sync(&pdev->dev);
 	pm_runtime_disable(&pdev->dev);
 
-	if(timer->irq > 0)
-	{
-		devm_free_irq(&pdev->dev, timer->irq, timer);
-	}
-	if(timer->icap)
-	{
-		icap_delete_channel(timer->icap);
-	}
+	destroy_icap_interface(timer);
 
 #ifdef USE_XENOMAI
-	if(timer->udd)
-	{
-		udd_unregister_device(timer->udd);
-	}
+	destroy_xeno_interface(timer);
 #endif
 
-	misc_deregister(&timer->misc);
+	destroy_basic_interface(timer);
 
 	// all other resourcees are freed managed
 	return 0;
