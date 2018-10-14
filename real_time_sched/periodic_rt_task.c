@@ -6,6 +6,7 @@
 #include <sys/mman.h>
 #include <signal.h>
 #include <unistd.h>
+#include <pthread.h>
 
 
 #include "gpio_uapi.h"
