@@ -31,7 +31,7 @@
 	fragment@3 { 
 		target = <&timer7>;
      	__overlay__ {
-     		ext,pwm-mode;
+     		ext,xenomai-pwm;
         };
 	};
 
