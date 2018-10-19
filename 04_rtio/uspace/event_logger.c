@@ -9,7 +9,7 @@
 
 
 
-int end;
+volatile int end;
 
 void signal_handler(int sig)
 {

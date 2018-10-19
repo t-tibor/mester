@@ -561,7 +561,11 @@ static int timer_probe(struct platform_device *pdev)
 
 
 	dev_info(&pdev->dev,"%s initialization succeeded.\n",timer->name);
+	#ifdef USE_XENOMAI
 	dev_info(&pdev->dev,"Base address: 0x%lx, length: %u, irq num: %d, icap channel %s, pwm channel %s.\n",timer->regspace_phys_base,timer->regspace_size,timer->irq, (timer->icap) ? "enabled" : "disabled", (timer->udd_registered) ? "enabled" : "disabled");
+	#else
+	dev_info(&pdev->dev,"Base address: 0x%lx, length: %u, irq num: %d, icap channel %s.\n",timer->regspace_phys_base,timer->regspace_size,timer->irq, (timer->icap) ? "enabled" : "disabled");
+	#endif
 
  	platform_set_drvdata(pdev,timer);
 

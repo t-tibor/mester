@@ -34,9 +34,10 @@
 // 4.4 and 4.12 kernels behave differently:
 // @ 4.4 kernel the eCAP clock is disabled after the driver swap, so it has to be enabled,
 // by using the appropriate function of the pwmss parent module.
-#define OLD_KERNEL
+// this variable is set in the makefile
+//#ifdef ECAP_OLD_KERNEL
 
-#ifdef OLD_KERNEL
+#ifdef ECAP_OLD_KERNEL
 #include <linux/mutex.h>
 
 	// copied from /drivers/pwm/pwm-tipwmss.h
@@ -417,7 +418,7 @@ static int ecap_probe(struct platform_device *pdev)
  		dev_err(&pdev->dev,"[%s:%d] Cannot resume the ecap.\n",__FUNCTION__,__LINE__);
  	}
 
- 	#ifdef OLD_KERNEL
+ 	#ifdef ECAP_OLD_KERNEL
  		ret = pwmss_enable_ecap_clk(pdev->dev.parent);
  		if(!(ret & PWMSS_ECAPCLK_EN_ACK))
  			dev_err(&pdev->dev,"Cannot enable eCAP clock.\n");

@@ -83,9 +83,9 @@ void do_periodic_work(struct xeno_systick_task *task, int event_cnt)
 
   gpio_toggle();
 
-  msg_len = sprintf(msg,"Event count: %d\n",event_cnt);
+  //msg_len = sprintf(msg,"Event count: %d\n",event_cnt);
 
-  xeno_task_log(task,msg,msg_len);
+  //xeno_task_log(task,msg,msg_len);
 }
 
 // called from primary mode
