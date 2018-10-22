@@ -10,6 +10,7 @@
 	fragment@0 { 
 		target = <&timer4>;
      	__overlay__ {
+            compatible="my,am335x-timer";
      		//ext,icap-mode;
         };
 	};
@@ -17,6 +18,7 @@
 	fragment@1 { 
 		target = <&timer5>;
      	__overlay__ {
+            compatible="my,am335x-timer";
      		ext,icap-mode;
         };
 	};
@@ -24,6 +26,7 @@
 	fragment@2 { 
 		target = <&timer6>;
      	__overlay__ {
+            compatible="my,am335x-timer";
      		ext,icap-mode;
         };
 	};
@@ -31,6 +34,7 @@
 	fragment@3 { 
 		target = <&timer7>;
      	__overlay__ {
+            compatible="my,am335x-timer";
      		ext,xenomai-pwm;
         };
 	};
@@ -57,6 +61,7 @@
     fragment@6 {
         target = <&ecap0>;
         __overlay__ {
+            compatible="my,am335x-ecap";
             status = "okay";
         };
     };
@@ -73,6 +78,7 @@
     fragment@8 {
         target = <&ecap1>;
         __overlay__ {
+            compatible="my,am335x-ecap";        
             status = "okay";
         };
     };
@@ -88,6 +94,7 @@
     fragment@10 {
         target = <&ecap2>;
         __overlay__ {
+            compatible="my,am335x-ecap";        
             status = "okay";
         };
     };

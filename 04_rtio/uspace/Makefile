@@ -4,10 +4,21 @@ CFLAGS=-Wall -Wextra -ggdb
 ODIR=bin
 
 
+#!!!!! 	set this parameter according to the kernel type !!!!!
+# 		it controls the CPTS query period	
+#CFLAGS+=-DTI_KERNEL
+
+
 SERVO_TEST_SRC := servo_test.c timekeeper.c timekeeper.h utils.c utils.h
 ICAP_SRC := icap_channel.c icap_channel.h icap_channel_API.h gpio.c gpio.h timekeeper.c timekeeper.h ./PPS_servo/PPS_servo.c  adc.c adc.h circ_buf.h circ_buf.c utils.c utils.h
 SERVO_SRC := ./servo/servo.c ./servo/pi.c ./servo/linreg.c ./servo/print.c circ_buf.c circ_buf.h utils.c utils.h
 LIBS := -lm -lpthread -lrt
+
+
+.PHONY: all clean 
+
+all: $(ODIR)/event_logger $(ODIR)/PPS_generator  $(ODIR)/servo_test $(ODIR)/PPS_tester
+
 
 %.o : %.c
 	$(CC) $(CFLAGS)  -c $< -o $@ $(LIBS)
@@ -27,12 +38,6 @@ $(ODIR)/PPS_generator: $(ICAP_SRC)  $(SERVO_SRC) pps_generator.c
 $(ODIR)/PPS_tester: $(ICAP_SRC)  $(SERVO_SRC) pps_tester.c
 	$(BB_CC) $(CFLAGS)  -o $@  $^  $(LIBS)
 
-
-
-.PHONY: all clean 
-
-
-all: $(ODIR)/event_logger $(ODIR)/PPS_generator  $(ODIR)/servo_test $(ODIR)/PPS_tester
 
 clean:
 	rm -f $(ODIR)/*

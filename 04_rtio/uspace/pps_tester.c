@@ -44,8 +44,8 @@ int main()
 	printf("\teCAP2: P9_28\n\n");
 
 	start_pps_generator(5, 7);
-	start_icap_logging(0);
-	start_icap_logging(2);	
+	start_icap_logging(0,1);
+	start_icap_logging(2,1);	
 
 
 	pause();

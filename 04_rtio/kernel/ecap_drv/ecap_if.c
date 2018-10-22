@@ -456,8 +456,7 @@ static int ecap_remove(struct platform_device *pdev)
 
 
 static struct of_device_id ecap_of_match[] = {
-	{ .compatible	= "ti,am3352-ecap" },
-	{ .compatible	= "ti,am33xx-ecap" },
+	{ .compatible	= "my,am335x-ecap" },
 	{}
 };
 

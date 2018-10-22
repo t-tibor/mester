@@ -1,0 +1,57 @@
+#!/bin/bash
+
+alias dm="busybox devmem"
+
+
+rd () {
+	busybox devmem `printf "0x%X" $(( $1 + $2 ))`
+}
+
+wr (){
+	busybox devmem `printf "0x%X" $(( $1 +  $2 ))` 32  $3
+}
+
+#Timers
+TIMER4_BASE="0x48044000"
+TIMER5_BASE="0x48046000"
+TIMER6_BASE="0x48048000"
+TIMER7_BASE="0x4804A000"
+
+TCLR_OFFSET="0x38"
+TLDR_OFFSET="0x40"
+TMAR_OFFSET="0x4C"
+TTRG_OFFSET="0x44"
+
+setup_pwm() {
+	echo "Setting up PWM signal on Timer$1"
+	BASE=$((TIMER$1_BASE))
+	wr $BASE $TLDR_OFFSET $(( 0xFFFFFFFF - $2 * 24000 ))
+	wr $BASE $TMAR_OFFSET $(( 0xFFFFFFFF - $2 * 24000 * 9 / 10 ))
+	wr $BASE $TCLR_OFFSET 0x1843 
+	wr $BASE $TTRG_OFFSET 1
+}
+
+idx=$1
+period=$2
+
+if [ -z $idx ]; then
+	echo "Format: pwm_setup <dmtimer idx> <pwm period in msec>"
+	echo "Duty cycle: 10%"
+	exit 0
+fi
+
+case $idx in
+[0-2])
+	echo "Only DMTimers are supported"
+	;;
+[4-7])
+	setup_pwm $idx $period
+	;;
+*)
+	echo "Invalid timer index $1"
+	;;
+esac
+
+
+
+

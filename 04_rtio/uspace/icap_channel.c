@@ -235,8 +235,8 @@ struct dmtimer dmts[4]= {
 		.dev_path = "/dev/DMTimer5",
 		.icap_path = "/dev/dmtimer5_icap",
 		.idx = 5,
-		.load = 0xFF000000,
-		.match = 0xFF200000,
+		.load = DMTIMER5_LOAD_VALUE,
+		.match = (DMTIMER5_LOAD_VALUE + 0x200000),
 		.enabled = 1,
 		.enable_oc = 1,
 		.enable_icap = 1,
@@ -842,6 +842,8 @@ pthread_t workers[MAX_WORKER_COUNT];
 int worker_cnt = 0;
 
 
+// print events to stdout too
+int logger_verbose = 0;
 void *channel_logger(void *arg)
 {
 	struct icap_channel *ch = (struct icap_channel*)arg;
@@ -869,7 +871,8 @@ void *channel_logger(void *arg)
 		for(int i=0;i<rcvCnt;i++)
 		{
 			fprintf(log,"%" PRIu64 ", %" PRIu64 "\n",ts2[i],ts[i]);
-			//fprintf(stdout,"CH%d - Local:%" PRIu64 ", Global:%lf sec, %llunsec\n",ch->idx,ts2[i],(ts[i]/1e9),ts[i]%1000000000);
+			if(logger_verbose)
+				fprintf(stdout,"[icap logger CH%d] %llusec, %llunsec\n",ch->idx,(ts[i]/1000000000),ts[i]%1000000000);
 		}
 	}
 
@@ -1536,7 +1539,7 @@ struct icap_channel *get_channel(int timer_idx)
 	return NULL;
 }
 
-int start_icap_logging(int timer_idx)
+int start_icap_logging(int timer_idx, int verbose)
 {
 	int err;
 
@@ -1557,6 +1560,9 @@ int start_icap_logging(int timer_idx)
 	}
 
 	fprintf(stderr,"Starting icap logger on channel %d.\n",timer_idx);
+
+	if(verbose)
+		logger_verbose = 1;
 
 	err = pthread_create(&workers[worker_cnt++], NULL, channel_logger, (void*)c);
 	if(err)

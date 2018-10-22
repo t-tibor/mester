@@ -30,12 +30,13 @@ int main(int argc, char **argv)
 	int period = 1000;
 	int divider = 1;
 	int verbose = 0;
+	int icap_logger_verbose = 0;
 	int arg;
 
 		/* Processing the command line arguments */
 	if(argc > 1)
 	{
-		while(EOF != (arg = getopt(argc, argv, "n:d:vw")))
+		while(EOF != (arg = getopt(argc, argv, "n:d:vwl")))
 		{
 			switch(arg)
 			{
@@ -43,7 +44,8 @@ int main(int argc, char **argv)
 			case 'd' : divider = atoi(optarg); break;
 			case 'v' : verbose=1; break;
 			case 'w' : verbose = 2; break;
-			default : printf("Usage: \n\t-n: Pulse number per second (frequency in Hz)\n\t-d: Pulse prescaler for the servo.\n\t-v: verbose mode (print detected error only)\n\t-w: full verbose mode (print most of the servo parameters) \n\n");
+			case 'l' : icap_logger_verbose = 1;break;
+			default : printf("Usage: \n\t-n: Pulse number per second (frequency in Hz)\n\t-d: Pulse prescaler for the servo.\n\t-v: verbose mode (print detected error only)\n\t-w: full verbose mode (print most of the servo parameters)\n\t-l: print captured events to stdout too. \n\n");
 						return 0;
 			}
 		}
@@ -66,9 +68,18 @@ int main(int argc, char **argv)
 	printf("\teCAP0: P9_42\n");
 	printf("\teCAP2: P9_28\n\n");
 
+	printf("Wait for the timekeeper to stabilize:");
+	for(int i=0;i<5;i++)
+	{
+		sleep(1);
+		printf(".\n");
+	}
+	printf("\n");
+
+
 	start_npps_generator(0, 7,period,divider,verbose);
 
-	start_icap_logging(2);
+	start_icap_logging(2,icap_logger_verbose);
 
 	pause();
 

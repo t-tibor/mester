@@ -20,7 +20,7 @@ struct timer_setup_t
 
 int init_rtio(struct timer_setup_t setup);
 void close_rtio();
-int start_icap_logging(int timer_idx);
+int start_icap_logging(int timer_idx, int verbose);
 int start_pps_generator(int icap_timer_idx, int pwm_timer_idx);
 int start_npps_generator(int icap_timer_idx, int pwm_timer_idx, uint32_t pps_period_ms, uint32_t hw_prescaler, int verbose_level);
 

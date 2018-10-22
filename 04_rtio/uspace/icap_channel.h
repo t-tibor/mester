@@ -5,6 +5,18 @@
 #include <sys/ioctl.h>
 #include "icap_channel_API.h"
 
+
+// DMTimer5 load value (related to CPTS query period)
+#ifdef TI_KERNEL
+	#warning "CPTS poll period: 700msec"
+	#define DMTIMER5_LOAD_VALUE			(0xFF000000UL) 	// !! use it for TI kernels !!
+#else
+	#warning "CPTS poll period: 350msec"
+	#define DMTIMER5_LOAD_VALUE			(0xFF800000UL) 		// !! use it for mainline kernel with CPTS patch !!
+#endif
+
+
+
 // dmtimer registers
 #define DMTIMER_TIDR				0x00
 #define DMTIMER_TIOCP				0x10

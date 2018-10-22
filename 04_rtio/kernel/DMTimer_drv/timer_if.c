@@ -605,7 +605,7 @@ static int timer_remove(struct platform_device *pdev)
 
 
 static struct of_device_id timer_of_match[] = {
-	{ .compatible = "ti,am335x-timer", },
+	{ .compatible = "my,am335x-timer", },
 	{ }
 };
 

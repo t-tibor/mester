@@ -24,7 +24,7 @@ struct timer_setup_t setup =
 {
 	.dmtimer4_mode = NONE,
 	.dmtimer6_mode = NONE,
-	.dmtimer7_mode = NONE,
+	.dmtimer7_mode = PWM,
 	
 	.ecap0_mode = NONE,
 	.ecap2_mode = NONE
@@ -47,8 +47,9 @@ int main()
 	printf("\tDMTimer6: P8_10\n");
 	printf("\tDMTimer7: P8_08\n\n");
 
+
 	printf("Recording events on dmtimer 5 channel.\n");
-	start_icap_logging(5);
+	start_icap_logging(5,1);
 
 	while(!end)
 		sleep(2);
