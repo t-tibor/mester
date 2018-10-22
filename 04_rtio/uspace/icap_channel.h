@@ -8,10 +8,10 @@
 
 // DMTimer5 load value (related to CPTS query period)
 #ifdef TI_KERNEL
-	#warning "CPTS poll period: 700msec"
+	//#warning "CPTS poll period: 700msec"
 	#define DMTIMER5_LOAD_VALUE			(0xFF000000UL) 	// !! use it for TI kernels !!
 #else
-	#warning "CPTS poll period: 350msec"
+	//#warning "CPTS poll period: 350msec"
 	#define DMTIMER5_LOAD_VALUE			(0xFF800000UL) 		// !! use it for mainline kernel with CPTS patch !!
 #endif
 
@@ -110,7 +110,7 @@ struct ts_channel
 	void *ch;
 	int (*read)(struct ts_channel *ch, uint64_t *buff, int len);
 	int (*flush)(struct ts_channel *ch);
-}
+};
 
 struct cpts_channel
 {
@@ -225,7 +225,7 @@ void dmtimer_stop_timer(struct dmtimer *t);
 
 // structures for the pps generation
 extern struct timekeeper *tk;
-extern int rtio_quit;
+extern volatile int rtio_quit;
 
 
 #endif

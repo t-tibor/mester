@@ -43,7 +43,7 @@ int main()
 	printf("\teCAP0: P9_42\n");
 	printf("\teCAP2: P9_28\n\n");
 
-	start_pps_generator(5, 7);
+	start_pps_generator(5, 7,0);
 	start_icap_logging(0,1);
 	start_icap_logging(2,1);	
 

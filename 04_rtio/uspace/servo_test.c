@@ -173,7 +173,7 @@ int main(int argc, char **argv)
 	int64_t offset;
 	struct servo *s;
 	enum servo_state state ;
-	uint64_t servo_sync_offset;
+	int64_t servo_sync_offset;
 	char fout[256];
 	double dt;
 

@@ -17,7 +17,6 @@
 #include "timekeeper.h"
 #include "icap_channel.h"
 #include "gpio.h"
-#include "./PPS_servo/BBonePPS.h"
 #include "./PPS_servo/PPS_servo.h"
 #include "adc.h"
 #include "circ_buf.h"
@@ -68,10 +67,12 @@ struct cpts_channel cpts_channels[4];
 
 int ts_channel_cpts_read(struct ts_channel *ts_ch, uint64_t *buf, int len);
 int ts_channel_cpts_flush(struct ts_channel *ts_ch);
+int ts_channel_icap_read(struct ts_channel *ts_ch, uint64_t *buf, int len);
+int ts_channel_icap_flush(struct ts_channel *ts_ch);
+
 
 int create_cpts_channels()
 {
-	int i;
 	int pipefd[2];
 
 	for(int i=0;i<4;i++)
@@ -79,14 +80,14 @@ int create_cpts_channels()
 		cpts_channels[i].idx = i+4;
 	    if (pipe(pipefd) == -1) 
 	    {
-	        perror("Cannoe create pipe for CPTS channel %d.\n",i+4);
+	        fprintf(stderr,"Cannot create pipe for CPTS channel %d.\n",i+4);
 	        return -1;
 	    }
 	    cpts_channels[i].fd_read = pipefd[0];
 	    cpts_channels[i].fd_write = pipefd[1];
 	    // make write side nonblocking
 	    if(fcntl(pipefd[1],F_SETFL, O_NONBLOCK))
-	    	perror("Cannot set O_NONBLOCK flag on the pipe.\n");
+	    	fprintf(stderr,"Cannot set O_NONBLOCK flag on the pipe.\n");
 
 	    cpts_channels[i].ts_ch.ch = &cpts_channels[i];
 	    cpts_channels[i].ts_ch.read = ts_channel_cpts_read;
@@ -100,11 +101,14 @@ int close_cpts_channels()
 {
 	for(int i=0;i<4;i++)
 	{
-		if(cpts_chnnels[i].fd_read)
-			close(cpts_chnnels[i].fd_read);
+		if(cpts_channels[i].fd_read)
+			close(cpts_channels[i].fd_read);
 
-		if(cpts_chnnels[i].fd_write)
-			close(cpts_chnnels[i].fd_write);
+		if(cpts_channels[i].fd_write)
+			close(cpts_channels[i].fd_write);
+
+		cpts_channels[i].fd_read = 0;
+		cpts_channels[i].fd_write = 0;
 	}
 	return 0;
 }
@@ -115,12 +119,12 @@ int cpts_channel_write(struct cpts_channel *ch, uint64_t buf)
 	return 0;
 }
 
-int cpts_channel_read(struct cpts_channel *ch, uint64_t *buf)
+int cpts_channel_read(struct cpts_channel *ch, uint64_t *buf, int len)
 {
 	int count;
 
-	count = read(ch->fd_read, buf, sizeof(uint64_t));
-	if(count > 0 && count != sizeof(uint64_t))
+	count = read(ch->fd_read, buf, len * sizeof(uint64_t));
+	if( (count % sizeof(uint64_t)) != 0 )
 		fprintf(stderr,"Invalid timestamp length from the pipe %d.\n",ch->idx);
 
 	return count / sizeof(uint64_t);
@@ -137,6 +141,7 @@ int cpts_disable_channels()
 			ch->fd_write = 0;
 		}
 	}
+	return 0;
 }
 
 // input capture channels
@@ -242,26 +247,35 @@ void disable_channel(struct icap_channel *c)
 // generic timestamp channel
 int ts_channel_icap_read(struct ts_channel *ts_ch, uint64_t *buf, int len)
 {
+	int cnt;
 	struct icap_channel *icap = (struct icap_channel*)ts_ch->ch;
-	return read_channel(icap, buf,len);
+
+	cnt = read_channel(icap, buf,len);
+	timekeeper_convert(tk, buf, cnt);
+	return cnt;
 }
 
 int ts_channel_icap_flush(struct ts_channel *ts_ch)
 {
 	struct icap_channel *icap = (struct icap_channel*)ts_ch->ch;
+
 	flush_channel(icap);
 	return 0;
 }
 
 int ts_channel_cpts_read(struct ts_channel *ts_ch, uint64_t *buf, int len)
 {
-	struct struct cpts_channel *cch = (struct cpts_channel*)ts_ch->ch;
-	if(len <= 0) return 0;
-	return cpts_channel_read(cch, buf);
+	int cnt;
+	struct cpts_channel *cch = (struct cpts_channel*)ts_ch->ch;
+
+	cnt =  cpts_channel_read(cch, buf,len);
+	timekeeper_convert(tk,buf,cnt);
+	return cnt;
 }
 
 int ts_channel_cpts_flush(struct ts_channel *ts_ch)
 {
+	(void)ts_ch;
 	return 0;
 }
 
@@ -840,7 +854,6 @@ int ptp_disable_hwts(int ch)
 
 void ptp_close()
 {
-	ptp_disable_hwts();
 	close(ptp_fdes);
 }
 
@@ -871,13 +884,13 @@ int ptp_get_ts(struct timespec *ts, int *channel)
 
 	ts->tv_sec = extts_event[cnt].t.sec;
 	ts->tv_nsec = extts_event[cnt].t.nsec;
-	channel = extts_event[cnt].index;
+	*channel = extts_event[cnt].index;
 
 	return 1;
 }
 
 
-int rtio_quit = 0;
+volatile int rtio_quit = 0;
 
 pthread_t tk_thread;
 struct timekeeper *tk;
@@ -946,6 +959,7 @@ void *timekeeper_worker(void *arg)
 		}
 	}
 
+	ptp_disable_hwts(TIMER5_HWTS_PUSH_INDEX);
 	ptp_close();
 
 	// close write side of the cpts pipes
@@ -1544,7 +1558,7 @@ int init_rtio(struct timer_setup_t setup)
 
 	if(create_cpts_channels())
 	{
-		fprintf("CPTS channel error.\n");
+		fprintf(stderr,"CPTS channel error.\n");
 		return -1;
 	}
 
@@ -1615,11 +1629,20 @@ int init_rtio(struct timer_setup_t setup)
 
 	// enable cpts channels
 	if(setup.dmtimer4_cpts_hwts_en)
+	{
+		ptp_disable_hwts(0);
 		ptp_enable_hwts(0);
+	}
 	if(setup.dmtimer6_cpts_hwts_en)
+	{
+		ptp_disable_hwts(2);
 		ptp_enable_hwts(2);
+	}
 	if(setup.dmtimer7_cpts_hwts_en)
+	{
+		ptp_disable_hwts(3);
 		ptp_enable_hwts(3);
+	}
 
 	return 0;
 }
@@ -1756,14 +1779,22 @@ int start_icap_logging(int timer_idx, int verbose)
 	return 0;
 }
 
-struct PPS_servo_t pps;
-int start_npps_generator(int ts_channel_idx, int pwm_timer_idx, uint32_t pps_period_ms, uint32_t hw_prescaler, int verbose_level)
+
+int start_npps_generator(int icap_timer_idx, int pwm_timer_idx, uint32_t pps_period_ms, uint32_t hw_prescaler, int verbose_level)
 {
-	struct ts_channel *c;
+	struct nPPS_servo_t *npps;
+	struct icap_channel *c;
 	struct dmtimer *d;
 	int err;
 
-	c = get_ts_channel(ts_channel_idx);
+	npps = (struct nPPS_servo_t*)malloc(sizeof(struct nPPS_servo_t));
+	if(!npps)
+	{
+		fprintf(stderr,"Cannot alloc memory for pps descriptor.\n");
+		return -1;
+	}
+
+	c = get_channel(icap_timer_idx);
 	if(!c)
 	{
 		fprintf(stderr,"Inalvid timer idx for channel logging.\n");
@@ -1810,21 +1841,63 @@ int start_npps_generator(int ts_channel_idx, int pwm_timer_idx, uint32_t pps_per
 	}
 
 
-	pps.feedback_channel = c;	
-	pps.pwm_gen = d;
-	pps.period_ms = pps_period_ms;
-	pps.hw_prescaler = hw_prescaler;
-	pps.verbose_level = verbose_level;
+	npps->feedback_channel = c;	
+	npps->pwm_gen = d;
+	npps->period_ms = pps_period_ms;
+	npps->hw_prescaler = hw_prescaler;
+	npps->verbose_level = verbose_level;
 
-	fprintf(stderr,"Starting PPS generation on %s using icap channel %s as feedback.\nnPPS period: %dms, hw prescale rate: %d.\n",d->name, c->dev_path,pps_period_ms, hw_prescaler);
+	fprintf(stderr,"Starting nPPS generation on %s using icap channel %s as feedback.\nnPPS period: %dms, hw prescale rate: %d.\n",d->name, c->dev_path,pps_period_ms, hw_prescaler);
 
-	err = pthread_create(&workers[worker_cnt++], NULL, pps_worker, (void*)&pps);
+	err = pthread_create(&workers[worker_cnt++], NULL, npps_worker, (void*)npps);
 	if(err)
 		fprintf(stderr,"Cannot start the PPS servo thread.\n");
 	return 0;
 }
 
-int start_pps_generator(int icap_timer_idx, int pwm_timer_idx)
+
+int start_pps_generator(int ts_channel_idx, int pwm_timer_idx, int verbose_level)
 {
-	return start_npps_generator(icap_timer_idx, pwm_timer_idx, 1000, 1, 2);
+	struct PPS_servo_t *pps;
+	struct ts_channel *c;
+	struct dmtimer *d;
+	int err;
+
+	pps = (struct PPS_servo_t*)malloc(sizeof(struct PPS_servo_t));
+	if(!pps)
+	{
+		fprintf(stderr,"Cannot alloc memory for pps descriptor.\n");
+		return -1;
+	}
+
+	c = get_ts_channel(ts_channel_idx);
+	if(!c)
+	{
+		fprintf(stderr,"Inalvid timer idx for channel logging.\n");
+		return -1;
+	}
+
+	if(pwm_timer_idx < 4 || pwm_timer_idx > 7)
+	{
+		fprintf(stderr,"Invalid dmtimer index.\n");
+		return -1;
+	}
+	d = &dmts[pwm_timer_idx-4];
+	if(!d->enable_oc)
+	{
+		fprintf(stderr,"Timer is not in PWM mode.\n");
+		return -1;
+	}
+
+
+	pps->feedback_channel = c;	
+	pps->pwm_gen = d;
+	pps->verbose_level = verbose_level;
+
+	fprintf(stderr,"Starting PPS generation on %s.\n",d->name);
+
+	err = pthread_create(&workers[worker_cnt++], NULL, pps_worker, (void*)pps);
+	if(err)
+		fprintf(stderr,"Cannot start the PPS servo thread.\n");
+	return 0;
 }
