@@ -20,6 +20,10 @@ struct timer_setup_t setup =
 	.dmtimer4_mode = NONE,
 	.dmtimer6_mode = NONE,
 	.dmtimer7_mode = PWM,
+
+	.dmtimer4_cpts_hwts_en = 0,
+	.dmtimer6_cpts_hwts_en = 0,
+	.dmtimer7_cpts_hwts_en = 1,
 	
 	.ecap0_mode = ICAP,
 	.ecap2_mode = ICAP

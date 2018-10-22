@@ -63,10 +63,83 @@ void write8(volatile uint8_t *base, int offset, uint8_t val)
 
 
 
+// cpts timestamp channels
+struct cpts_channel cpts_channels[4];
 
+int ts_channel_cpts_read(struct ts_channel *ts_ch, uint64_t *buf, int len);
+int ts_channel_cpts_flush(struct ts_channel *ts_ch);
+
+int create_cpts_channels()
+{
+	int i;
+	int pipefd[2];
+
+	for(int i=0;i<4;i++)
+	{
+		cpts_channels[i].idx = i+4;
+	    if (pipe(pipefd) == -1) 
+	    {
+	        perror("Cannoe create pipe for CPTS channel %d.\n",i+4);
+	        return -1;
+	    }
+	    cpts_channels[i].fd_read = pipefd[0];
+	    cpts_channels[i].fd_write = pipefd[1];
+	    // make write side nonblocking
+	    if(fcntl(pipefd[1],F_SETFL, O_NONBLOCK))
+	    	perror("Cannot set O_NONBLOCK flag on the pipe.\n");
+
+	    cpts_channels[i].ts_ch.ch = &cpts_channels[i];
+	    cpts_channels[i].ts_ch.read = ts_channel_cpts_read;
+	    cpts_channels[i].ts_ch.flush = ts_channel_cpts_flush;
+
+	}
+	return 0;
+}
+
+int close_cpts_channels()
+{
+	for(int i=0;i<4;i++)
+	{
+		if(cpts_chnnels[i].fd_read)
+			close(cpts_chnnels[i].fd_read);
+
+		if(cpts_chnnels[i].fd_write)
+			close(cpts_chnnels[i].fd_write);
+	}
+	return 0;
+}
+
+int cpts_channel_write(struct cpts_channel *ch, uint64_t buf)
+{
+	write(ch->fd_write, &buf, sizeof(uint64_t));
+	return 0;
+}
+
+int cpts_channel_read(struct cpts_channel *ch, uint64_t *buf)
+{
+	int count;
+
+	count = read(ch->fd_read, buf, sizeof(uint64_t));
+	if(count > 0 && count != sizeof(uint64_t))
+		fprintf(stderr,"Invalid timestamp length from the pipe %d.\n",ch->idx);
+
+	return count / sizeof(uint64_t);
+}
+
+int cpts_disable_channels()
+{
+	for(int i=0;i<4;i++)
+	{
+		struct cpts_channel *ch = &cpts_channels[i];
+		if(ch->fd_write)
+		{
+			close(ch->fd_write);
+			ch->fd_write = 0;
+		}
+	}
+}
 
 // input capture channels
-
 int open_channel(struct icap_channel *c, char *dev_path, int idx, int bit_cnt, int mult, int div)
 {
 	int ret;
@@ -100,6 +173,10 @@ int open_channel(struct icap_channel *c, char *dev_path, int idx, int bit_cnt, i
 
 	fprintf(stderr,"Setting channel bit count to %d.\n",bit_cnt);
 	ioctl(c->fdes,ICAP_IOCTL_SET_TS_BITNUM,bit_cnt);
+
+	c->ts_ch.ch = c;
+	c->ts_ch.read = ts_channel_icap_read;
+	c->ts_ch.flush = ts_channel_icap_flush;
 
 	return 0;
 }
@@ -160,6 +237,34 @@ void disable_channel(struct icap_channel *c)
 {
 	ioctl(c->fdes,ICAP_IOCTL_STORE_DIS);
 }
+
+
+// generic timestamp channel
+int ts_channel_icap_read(struct ts_channel *ts_ch, uint64_t *buf, int len)
+{
+	struct icap_channel *icap = (struct icap_channel*)ts_ch->ch;
+	return read_channel(icap, buf,len);
+}
+
+int ts_channel_icap_flush(struct ts_channel *ts_ch)
+{
+	struct icap_channel *icap = (struct icap_channel*)ts_ch->ch;
+	flush_channel(icap);
+	return 0;
+}
+
+int ts_channel_cpts_read(struct ts_channel *ts_ch, uint64_t *buf, int len)
+{
+	struct struct cpts_channel *cch = (struct cpts_channel*)ts_ch->ch;
+	if(len <= 0) return 0;
+	return cpts_channel_read(cch, buf);
+}
+
+int ts_channel_cpts_flush(struct ts_channel *ts_ch)
+{
+	return 0;
+}
+
 
 
 // // timer character device interface for the timers
@@ -698,36 +803,36 @@ int ptp_open()
 	return 0;
 }
 
-int ptp_enable_hwts()
+int ptp_enable_hwts(int ch)
 {
 	struct ptp_extts_request extts_request;
 
 	// enable hardware timestamp generation for timer5
 	memset(&extts_request, 0, sizeof(extts_request));
-	extts_request.index = TIMER5_HWTS_PUSH_INDEX;
+	extts_request.index = ch;
 	extts_request.flags = PTP_ENABLE_FEATURE;
 
 	if(ioctl(ptp_fdes, PTP_EXTTS_REQUEST, &extts_request))
 	{
-	   fprintf(stderr,"Cannot enable timer5 hardware timestamp requests. %m\n");
+	   fprintf(stderr,"Cannot enable timer%d hardware timestamp requests. %m\n",ch);
 	   close(ptp_fdes);
 	   return -1;
 	}
 	return 0;
 }
 
-int ptp_disable_hwts()
+int ptp_disable_hwts(int ch)
 {
 	struct ptp_extts_request extts_request;
 
 	// enable hardware timestamp generation for timer5
 	memset(&extts_request, 0, sizeof(extts_request));
-	extts_request.index = TIMER5_HWTS_PUSH_INDEX;
+	extts_request.index = ch;
 	extts_request.flags = 0;
 
 	if(ioctl(ptp_fdes, PTP_EXTTS_REQUEST, &extts_request))
 	{
-	   fprintf(stderr,"Cannot disable Timer 5 HWTS generation.\n");
+	   fprintf(stderr,"Cannot disable Timer %d HWTS generation.\n",ch);
 	   return -1;
 	}
 	return 0;
@@ -740,7 +845,7 @@ void ptp_close()
 }
 
 
-int ptp_get_ts(struct timespec *ts)
+int ptp_get_ts(struct timespec *ts, int *channel)
 {
 	struct ptp_extts_event extts_event[10];
 	int cnt;
@@ -766,6 +871,7 @@ int ptp_get_ts(struct timespec *ts)
 
 	ts->tv_sec = extts_event[cnt].t.sec;
 	ts->tv_nsec = extts_event[cnt].t.nsec;
+	channel = extts_event[cnt].index;
 
 	return 1;
 }
@@ -784,6 +890,7 @@ void *timekeeper_worker(void *arg)
 	struct timespec tspec;
 	uint64_t ptp_ts;
 	uint64_t hwts;
+	int channel;
 	// int pres = 0;
 
 
@@ -796,10 +903,10 @@ void *timekeeper_worker(void *arg)
 	next_ts = ts_period = (0xFFFFFFFF - trigger_timer->load)+1;
 
 
-	ptp_disable_hwts();
+	ptp_disable_hwts(TIMER5_HWTS_PUSH_INDEX);
 
 	// enable timer HW_TS push events
-	if(ptp_enable_hwts())
+	if(ptp_enable_hwts(TIMER5_HWTS_PUSH_INDEX))
 	{
 		fprintf(stderr,"Cannot enable HWTS generation.\n");
 		return NULL;
@@ -814,22 +921,37 @@ void *timekeeper_worker(void *arg)
 	while(!rtio_quit)
 	{
 		// calc hwts times from timer 5 settings
-		ptp_get_ts(&tspec);
-		// if(pres == 0)
-		// 	printf("PTP time: %ld sec, %lunsec\n",tspec.tv_sec, tspec.tv_nsec);
-		// pres = (pres+1) & 0x3;
-
+		ptp_get_ts(&tspec,&channel);
 		ptp_ts = ((uint64_t)tspec.tv_sec*1000000000ULL)+tspec.tv_nsec;
 
-		hwts = next_ts;
-		channel_do_conversion(&trigger_timer->channel,&hwts,1);
-		// send the new timestamp to the timekeeper
-		timekeeper_add_sync_point(tk, hwts, ptp_ts);
+		if(channel == TIMER5_HWTS_PUSH_INDEX)
+		{
+			// event created by the dmtimer 5
+			hwts = next_ts;
+			channel_do_conversion(&trigger_timer->channel,&hwts,1);
+			// send the new timestamp to the timekeeper
+			timekeeper_add_sync_point(tk, hwts, ptp_ts);
 
-		next_ts += ts_period;
+			next_ts += ts_period;
+		}
+		else
+		{
+			if(channel < 0 || channel > 3)
+			{
+				fprintf(stderr,"Invalid cpts channel id: %d\n",channel);
+				continue;
+			}
+
+			cpts_channel_write(&cpts_channels[channel],ptp_ts);
+		}
 	}
 
 	ptp_close();
+
+	// close write side of the cpts pipes
+	cpts_disable_channels();
+
+	// close cpts channels
 
 	return NULL;
 }
@@ -1420,6 +1542,11 @@ int init_rtio(struct timer_setup_t setup)
 	int err = 0;
 	double trigger_period;
 
+	if(create_cpts_channels())
+	{
+		fprintf("CPTS channel error.\n");
+		return -1;
+	}
 
 	// parse trigger settings
 	if(parse_setup(setup))
@@ -1485,6 +1612,15 @@ int init_rtio(struct timer_setup_t setup)
 		close_timers();
 		timekeeper_destroy(tk);
 	}
+
+	// enable cpts channels
+	if(setup.dmtimer4_cpts_hwts_en)
+		ptp_enable_hwts(0);
+	if(setup.dmtimer6_cpts_hwts_en)
+		ptp_enable_hwts(2);
+	if(setup.dmtimer7_cpts_hwts_en)
+		ptp_enable_hwts(3);
+
 	return 0;
 }
 
@@ -1507,8 +1643,55 @@ void close_rtio()
 
 	pthread_join(tk_thread,&ret);
 
+	ptp_disable_hwts(0);
+	ptp_disable_hwts(1);
+	ptp_disable_hwts(2);
+	ptp_disable_hwts(3);
+
 	close_timers();
 	timekeeper_destroy(tk);
+	close_cpts_channels();
+}
+
+struct ts_channel *get_ts_channel(int timer_idx)
+{
+	switch(timer_idx)
+	{
+		case -7:
+			return &cpts_channels[3].ts_ch;
+			break;
+		case -6:
+			return &cpts_channels[2].ts_ch;
+			break;
+		case -5:
+			return &cpts_channels[2].ts_ch;
+			break;
+		case -4:
+			return &cpts_channels[1].ts_ch;
+			break;
+						
+		case 0:
+			return &ecaps[0].channel.ts_ch;
+			break;
+		case 2:
+			return &ecaps[2].channel.ts_ch;
+			break;
+		case 4:
+			return &dmts[0].channel.ts_ch;
+			break;
+		case 5:
+			return &dmts[1].channel.ts_ch;
+			break;
+		case 6:
+			return &dmts[2].channel.ts_ch;
+			break;
+		case 7:
+			return &dmts[3].channel.ts_ch;
+			break;
+		default:
+			return NULL;
+	}
+	return NULL;
 }
 
 struct icap_channel *get_channel(int timer_idx)
@@ -1538,7 +1721,6 @@ struct icap_channel *get_channel(int timer_idx)
 	}
 	return NULL;
 }
-
 int start_icap_logging(int timer_idx, int verbose)
 {
 	int err;
@@ -1575,13 +1757,13 @@ int start_icap_logging(int timer_idx, int verbose)
 }
 
 struct PPS_servo_t pps;
-int start_npps_generator(int icap_timer_idx, int pwm_timer_idx, uint32_t pps_period_ms, uint32_t hw_prescaler, int verbose_level)
+int start_npps_generator(int ts_channel_idx, int pwm_timer_idx, uint32_t pps_period_ms, uint32_t hw_prescaler, int verbose_level)
 {
-	struct icap_channel *c;
+	struct ts_channel *c;
 	struct dmtimer *d;
 	int err;
 
-	c = get_channel(icap_timer_idx);
+	c = get_ts_channel(ts_channel_idx);
 	if(!c)
 	{
 		fprintf(stderr,"Inalvid timer idx for channel logging.\n");
@@ -1614,7 +1796,7 @@ int start_npps_generator(int icap_timer_idx, int pwm_timer_idx, uint32_t pps_per
 
 	if(hw_prescaler != 1 && icap_timer_idx != 0 && icap_timer_idx != 2)
 	{
-		fprintf(stderr,"Clock divigin is only supported on the eCAP peripherals.\n");
+		fprintf(stderr,"Clock dividing is only supported on the eCAP peripherals.\n");
 		return -1;
 	}
 

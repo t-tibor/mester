@@ -105,6 +105,21 @@
 
 // structure definitions
 
+struct ts_channel
+{
+	void *ch;
+	int (*read)(struct ts_channel *ch, uint64_t *buff, int len);
+	int (*flush)(struct ts_channel *ch);
+}
+
+struct cpts_channel
+{
+	int idx;
+	int fd_read;
+	int fd_write;
+	struct ts_channel ts_ch;
+};
+
 struct icap_channel
 {
 	char *dev_path;
@@ -113,6 +128,8 @@ struct icap_channel
 	int32_t offset;
 	uint64_t mult;
 	uint64_t div;
+
+	struct ts_channel ts_ch;
 };
 
 

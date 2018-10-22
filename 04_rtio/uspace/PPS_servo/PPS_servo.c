@@ -71,7 +71,7 @@ void calc_offset(uint64_t ts_g, uint64_t period_ns, uint64_t *base, int32_t *off
 void *pps_servo_worker(void *arg)
 {
 	struct PPS_servo_t *data 		= (struct PPS_servo_t*)arg;
-	struct icap_channel *ch 		= data->feedback_channel;
+	struct ts_channel *ch 			= data->feedback_channel;
 	struct dmtimer *pwm_gen 		= data->pwm_gen;
 	uint64_t target_period_ns		= (uint64_t)data->period_ms * 1000000;
 	unsigned hw_pres 				= data->hw_prescaler;
@@ -122,7 +122,7 @@ void *pps_servo_worker(void *arg)
 	}
 	fprintf(stderr,"\n");
 
-	flush_channel(ch);
+	ch->flush(ch);
 
 	dmtimer_pwm_setup(pwm_gen,timer_nominal_period,30);
 	dmtimer_set_pin_dir(pwm_gen,0);
@@ -141,7 +141,7 @@ void *pps_servo_worker(void *arg)
 
 			// offset correction
 			LOG(1,"Starting offset correction.\n");
-			rcvCnt = read_channel(ch, ts_b,16);
+			rcvCnt = ch->read(ch,ts_b,16);
 				if(rcvCnt < 1)
 					return NULL;
 			ts_l = ts_b[rcvCnt-1];
