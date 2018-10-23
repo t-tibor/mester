@@ -269,7 +269,6 @@ int ts_channel_cpts_read(struct ts_channel *ts_ch, uint64_t *buf, int len)
 	struct cpts_channel *cch = (struct cpts_channel*)ts_ch->ch;
 
 	cnt =  cpts_channel_read(cch, buf,len);
-	timekeeper_convert(tk,buf,cnt);
 	return cnt;
 }
 
@@ -821,14 +820,14 @@ int ptp_enable_hwts(int ch)
 {
 	struct ptp_extts_request extts_request;
 
-	// enable hardware timestamp generation for timer5
+	// enable hardware timestamp generation
 	memset(&extts_request, 0, sizeof(extts_request));
 	extts_request.index = ch;
 	extts_request.flags = PTP_ENABLE_FEATURE;
 
 	if(ioctl(ptp_fdes, PTP_EXTTS_REQUEST, &extts_request))
 	{
-	   fprintf(stderr,"Cannot enable timer%d hardware timestamp requests. %m\n",ch);
+	   fprintf(stderr,"Cannot enable HWTS_CHANNEL%d hardware timestamp requests. %m\n",ch);
 	   close(ptp_fdes);
 	   return -1;
 	}
@@ -855,6 +854,7 @@ int ptp_disable_hwts(int ch)
 void ptp_close()
 {
 	close(ptp_fdes);
+	ptp_fdes = 0;
 }
 
 
@@ -906,24 +906,7 @@ void *timekeeper_worker(void *arg)
 	int channel;
 	// int pres = 0;
 
-
-	if(ptp_open())
-	{
-		fprintf(stderr,"Cannot open PTP device.\n");
-		return NULL;
-	}
-
 	next_ts = ts_period = (0xFFFFFFFF - trigger_timer->load)+1;
-
-
-	ptp_disable_hwts(TIMER5_HWTS_PUSH_INDEX);
-
-	// enable timer HW_TS push events
-	if(ptp_enable_hwts(TIMER5_HWTS_PUSH_INDEX))
-	{
-		fprintf(stderr,"Cannot enable HWTS generation.\n");
-		return NULL;
-	}
 
 	// increate thread priority
 	if(goto_rt_level(TIMEKEEPER_RT_PRIO))
@@ -959,14 +942,8 @@ void *timekeeper_worker(void *arg)
 		}
 	}
 
-	ptp_disable_hwts(TIMER5_HWTS_PUSH_INDEX);
-	ptp_close();
-
-	// close write side of the cpts pipes
+	// close write side of the cpts pipes to wake readers
 	cpts_disable_channels();
-
-	// close cpts channels
-
 	return NULL;
 }
 
@@ -1556,15 +1533,48 @@ int init_rtio(struct timer_setup_t setup)
 	int err = 0;
 	double trigger_period;
 
+	// create pipes for cpts timestamp forwarding
 	if(create_cpts_channels())
 	{
 		fprintf(stderr,"CPTS channel error.\n");
 		return -1;
 	}
 
-	// parse trigger settings
+	// parse hw settings
 	if(parse_setup(setup))
 		return -1;
+
+	// init /dev/ptp0 clock
+	if(ptp_open())
+	{
+		fprintf(stderr,"Cannot open PTP device.\n");
+		return -1;
+	}
+	if(setup.dmtimer4_cpts_hwts_en)
+	{
+		ptp_disable_hwts(0);
+		ptp_enable_hwts(0);
+	}
+	ptp_disable_hwts(TIMER5_HWTS_PUSH_INDEX);
+
+	if(ptp_enable_hwts(TIMER5_HWTS_PUSH_INDEX))
+	{
+		fprintf(stderr,"Cannot enable DMTimer 5 HWTS generation.\n");
+		return -1;
+	}
+
+	if(setup.dmtimer6_cpts_hwts_en)
+	{
+		ptp_disable_hwts(2);
+		ptp_enable_hwts(2);
+	}
+	if(setup.dmtimer7_cpts_hwts_en)
+	{
+		ptp_disable_hwts(3);
+		ptp_enable_hwts(3);
+	}
+
+
 
 	trigger_period = (double)((0xFFFFFFFF - trigger_timer->load)+1) * 1000 / 24 / 1e9 ;
 	tk = timekeeper_create(0,trigger_period, SYNC_OFFSET, TIMEKEEPER_LOG_NAME);
@@ -1627,22 +1637,7 @@ int init_rtio(struct timer_setup_t setup)
 		timekeeper_destroy(tk);
 	}
 
-	// enable cpts channels
-	if(setup.dmtimer4_cpts_hwts_en)
-	{
-		ptp_disable_hwts(0);
-		ptp_enable_hwts(0);
-	}
-	if(setup.dmtimer6_cpts_hwts_en)
-	{
-		ptp_disable_hwts(2);
-		ptp_enable_hwts(2);
-	}
-	if(setup.dmtimer7_cpts_hwts_en)
-	{
-		ptp_disable_hwts(3);
-		ptp_enable_hwts(3);
-	}
+
 
 	return 0;
 }
@@ -1666,13 +1661,16 @@ void close_rtio()
 
 	pthread_join(tk_thread,&ret);
 
+
+	close_timers();
+	timekeeper_destroy(tk);
+
+
 	ptp_disable_hwts(0);
 	ptp_disable_hwts(1);
 	ptp_disable_hwts(2);
 	ptp_disable_hwts(3);
-
-	close_timers();
-	timekeeper_destroy(tk);
+	ptp_close();
 	close_cpts_channels();
 }
 

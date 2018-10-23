@@ -201,7 +201,7 @@ static void *pps_servo_worker(void *arg)
 					offset_pred = (double)(offset) + (((int32_t)prev_period - (int32_t)period_base)*clk_tick_time_ns);
 				
 
-					period_comp = ROUND_2_INT(-(offset_pred/clk_tick_time_ns)*SERVO_STATE_2_PROP_FACTOR);
+					period_comp = ROUND_2_INT(-(offset_pred/clk_tick_time_ns)*SERVO_STATE_1_PROP_FACTOR);
 					new_period = period_base + period_comp;
 
 					
@@ -377,7 +377,7 @@ static void *pps_logger_worker(void *arg)
 	}
 
 	fclose(fout);
-	LOG(0,"PPS logger stopped.");
+	LOG(0,"PPS logger stopped.\n");
 	return NULL;
 }
 

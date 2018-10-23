@@ -33,17 +33,21 @@ int main(int argc, char **argv)
 {
 	int verbose = 0;
 	int arg;
+	int logger_verbose = 0;
+	int use_icap = 0;
 
 		/* Processing the command line arguments */
 	if(argc > 1)
 	{
-		while(EOF != (arg = getopt(argc, argv, "vwl")))
+		while(EOF != (arg = getopt(argc, argv, "vwli")))
 		{
 			switch(arg)
 			{
-			case 'v' : verbose=1; break;
+			case 'i' : use_icap = 1; break;
+			case 'v' : verbose = 1; break;
 			case 'w' : verbose = 2; break;
-			default : printf("Usage: \n\t-v: verbose mode (print detected error only)\n\t-w: full verbose mode (print most of the servo parameters)\n\t-l: print captured events to stdout too. \n\n");
+			case 'l' : logger_verbose = 1; break;
+			default : printf("Usage: \n\t-i: enable external event timestamping on eCAP0 (P9_42) and eCAP2 (P9_28)\n\t-v: PPS verbose mode (print detected error only)\n\t-w: PPS full verbose mode (print most of the servo parameters)\n\t-l: print timestamps of the captured events to stdout. \n\n");
 						return 0;
 			}
 		}
@@ -66,16 +70,25 @@ int main(int argc, char **argv)
 	printf("\teCAP0: P9_42\n");
 	printf("\teCAP2: P9_28\n\n");
 
-	printf("Wait for the timekeeper to stabilize:");
+	
 	for(int i=0;i<5;i++)
 	{
+		printf("Wait for the timekeeper to stabilize:");
+		for(int j=0;j<i;j++)
+			printf(".");
+		printf("\n");
 		sleep(1);
-		printf(".\n");
 	}
 	printf("\n");
 
 	// start pps generation using the CPTS as feedback
 	start_pps_generator(-7, 7,verbose);
+	// start icap event logger
+	if(use_icap)
+	{
+		start_icap_logging(0, logger_verbose);
+		start_icap_logging(2, logger_verbose);
+	}
 
 	pause();
 
