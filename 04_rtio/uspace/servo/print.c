@@ -22,7 +22,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "print.h"
+#include "servo/print.h"
 
 static int verbose = 0;
 static int print_level = LOG_INFO;

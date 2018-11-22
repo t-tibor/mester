@@ -20,9 +20,9 @@
 #include <stdlib.h>
 #include <math.h>
 
-#include "linreg.h"
-#include "print.h"
-#include "servo_private.h"
+#include "servo/linreg.h"
+#include "servo/print.h"
+#include "servo/servo_private.h"
 
 /* Maximum and minimum number of points used in regression,
    defined as a power of 2 */

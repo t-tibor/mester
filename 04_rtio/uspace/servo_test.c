@@ -4,10 +4,10 @@
 #include <inttypes.h>
 #include <string.h>
 
-#include "./servo/print.h"
-#include "./servo/config.h"
-#include "./servo/servo.h"
-#include "./servo/pi.h"
+#include "servo/print.h"
+#include "servo/config.h"
+#include "servo/servo.h"
+#include "servo/pi.h"
 
 
 #include "timekeeper.h"

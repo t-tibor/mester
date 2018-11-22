@@ -6,11 +6,11 @@
 #include <inttypes.h>
 #include <pthread.h>
 
-#include "PPS_servo.h"
-#include "../icap_channel.h"
-#include "../timekeeper.h"
-#include "../circ_buf.h"
-#include "../utils.h"
+#include "PPS_servo/PPS_servo.h"
+#include "icap_channel.h"
+#include "timekeeper.h"
+#include "circ_buf.h"
+#include "utils.h"
 
 
 #define ROUND_2_INT(f) ((int)((f) >= 0.0 ? ((f) + 0.5) : ((f) - 0.5)))

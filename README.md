@@ -8,14 +8,14 @@
 - real_time_sched: periodis rt task compatible with normal and RT patched kernels
 - xenomai: xenomai specific files, periodic xenomai task
 
-##Capabilities
+## Capabilities
 - Generate PPS and nPPS signals on DMTimer4/6/7 outputs.
 - Timestamp external events using eCAP0/eCAP2/DMTimer5/DMTimer6/DMTimer7.
 
-##SD image
+## SD image
 - Image location can be found in: SD_image_location.txt.
 
-##Image usage
+## Image usage
 - PPS generator and event capturer: /home/debian/PPS_generator.
 - Run it as super user: "sudo ~/PPS_generator".
 - PPS pin: P8_08 (DMTimer 7 portimerpwm output).

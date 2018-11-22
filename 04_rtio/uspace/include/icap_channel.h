@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 #include <sys/ioctl.h>
-#include "icap_channel_API.h"
+#include "RTIO_API.h"
 
 
 // DMTimer5 load value (related to CPTS query period)
@@ -104,7 +104,6 @@
 
 
 // structure definitions
-
 struct ts_channel
 {
 	void *ch;
@@ -215,12 +214,7 @@ void disable_channel(struct icap_channel *c);
 // dmtimer
 int init_dmtimer(struct dmtimer *t);
 void close_dmtimer(struct dmtimer *t);
-int dmtimer_pwm_apply_offset(struct dmtimer *t, int32_t offset);
-int dmtimer_pwm_set_period(struct dmtimer *t, uint32_t period);
-int dmtimer_pwm_setup(struct dmtimer *t, uint32_t period, uint32_t duty);
-int dmtimer_set_pin_dir(struct dmtimer *t, uint8_t dir);
-void dmtimer_start_timer(struct dmtimer *t);
-void dmtimer_stop_timer(struct dmtimer *t);
+
 
 
 // structures for the pps generation

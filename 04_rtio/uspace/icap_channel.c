@@ -15,9 +15,8 @@
 
 #include "icap_channel.h"
 #include "timekeeper.h"
-#include "icap_channel.h"
 #include "gpio.h"
-#include "./PPS_servo/PPS_servo.h"
+#include "PPS_servo/PPS_servo.h"
 #include "adc.h"
 #include "circ_buf.h"
 #include "utils.h"
@@ -276,6 +275,12 @@ int ts_channel_cpts_flush(struct ts_channel *ts_ch)
 {
 	(void)ts_ch;
 	return 0;
+}
+
+int ts_channel_read(struct ts_channel *ts, uint64_t *buffer, int size)
+{
+	if(!ts) return -1;
+	return ts->read(ts,buffer,size);
 }
 
 
@@ -613,6 +618,17 @@ int dmtimer_pwm_set_period(struct dmtimer *t, uint32_t period)
 	return 0;
 }
 
+int dmtimer_pwm_set_duty(struct dmtimer *t, uint32_t period, uint32_t duty)
+{
+	uint32_t ld, match;
+	ld = 0xFFFFFFFF - period;
+	ld ++;
+	match = ld + (period*duty/100);
+
+	write32(t->dev.base, DMTIMER_TMAR, match);
+	return 0;
+}
+
 int dmtimer_pwm_setup(struct dmtimer *t, uint32_t period, uint32_t duty)
 {
 	uint32_t ld, match;
@@ -796,7 +812,7 @@ int ecap_set_prescaler(struct ecap_timer *e, unsigned char presc)
 // <------------------------------- CPTS interface ------------------------------->
 // <------------------------------------------------------------------------------>
 
-#include "ptp_clock.h"
+#include "PPS_servo/ptp_clock.h"
 
 #define PTP_DEVICE					"/dev/ptp0"
 #define TIMER5_HWTS_PUSH_INDEX		1 // HW2_TS_PUSH-1	
@@ -858,35 +874,37 @@ void ptp_close()
 }
 
 
-int ptp_get_ts(struct timespec *ts, int *channel)
+int ptp_get_ts(struct timespec *ts, int *channel, int len)
 {
-	struct ptp_extts_event extts_event[10];
+	struct ptp_extts_event extts_event[16];
 	int cnt;
+	int req_cnt = len < 16 ? len : 16;
 
-	cnt = read(ptp_fdes, extts_event, 2*sizeof(struct ptp_extts_event));
+	cnt = read(ptp_fdes, extts_event, req_cnt * sizeof(struct ptp_extts_event));
 	if(cnt < 0)
 	{
 		fprintf(stderr,"PTP read error: %s\n",strerror(errno));
 		return -1;
 	}
-	if(cnt == 0)
+	else if(cnt == 0)
 	{
 		return 0;
 	}
-	else if(cnt > (int)sizeof(struct ptp_extts_event))
+	else if( (cnt % sizeof(struct ptp_extts_event)) != 0 )
 	{
-		fprintf(stderr,"PTP timestamp accumulation.\n");
+		fprintf(stderr,"Broken PTP timestamp.\n");
+		return -1;
 	}
 	cnt /= sizeof(struct ptp_extts_event);
-	cnt--;
 
-	if(cnt < 0 ) return -1;
+	for(int i=0; i<cnt;i++)
+	{
+		ts[i].tv_sec  = extts_event[i].t.sec;
+		ts[i].tv_nsec = extts_event[i].t.nsec;
+		channel[i]    = extts_event[i].index;
+	}
 
-	ts->tv_sec = extts_event[cnt].t.sec;
-	ts->tv_nsec = extts_event[cnt].t.nsec;
-	*channel = extts_event[cnt].index;
-
-	return 1;
+	return cnt;
 }
 
 
@@ -900,10 +918,13 @@ void *timekeeper_worker(void *arg)
 {
 	struct timekeeper *tk = (struct timekeeper*)arg;
 	uint64_t next_ts, ts_period;
-	struct timespec tspec;
+	struct timespec tspec[16];
+	int channel[16];
 	uint64_t ptp_ts;
+	int ptp_ch;
 	uint64_t hwts;
-	int channel;
+	int rcvCnt;
+
 	// int pres = 0;
 
 	next_ts = ts_period = (0xFFFFFFFF - trigger_timer->load)+1;
@@ -917,31 +938,41 @@ void *timekeeper_worker(void *arg)
 	while(!rtio_quit)
 	{
 		// calc hwts times from timer 5 settings
-		ptp_get_ts(&tspec,&channel);
-		ptp_ts = ((uint64_t)tspec.tv_sec*1000000000ULL)+tspec.tv_nsec;
-
-		if(channel == TIMER5_HWTS_PUSH_INDEX)
+		rcvCnt = ptp_get_ts(tspec,channel,16);
+		if(rcvCnt <=0 )
 		{
-			// event created by the dmtimer 5
-			hwts = next_ts;
-			channel_do_conversion(&trigger_timer->channel,&hwts,1);
-			// send the new timestamp to the timekeeper
-			timekeeper_add_sync_point(tk, hwts, ptp_ts);
-
-			next_ts += ts_period;
+			fprintf(stderr,"Cannot read CPTS timestamp.\n");
+			break;
 		}
-		else
-		{
-			if(channel < 0 || channel > 3)
-			{
-				fprintf(stderr,"Invalid cpts channel id: %d\n",channel);
-				continue;
-			}
 
-			cpts_channel_write(&cpts_channels[channel],ptp_ts);
+		// handle timestamps
+		for(int i=0;i<rcvCnt;i++)
+		{
+			ptp_ts = ((uint64_t)tspec[i].tv_sec*1000000000ULL)+tspec[i].tv_nsec;
+			ptp_ch = channel[i];
+
+			if(ptp_ch == TIMER5_HWTS_PUSH_INDEX)
+			{
+				// DMTimer5 HWTS are consumed by the timekeeper core
+				hwts = next_ts;
+				channel_do_conversion(&trigger_timer->channel,&hwts,1);
+				// send the new timestamp to the timekeeper
+				timekeeper_add_sync_point(tk, hwts, ptp_ts);
+
+				next_ts += ts_period;
+			}
+			else // write timestamps to the pipes
+			{
+				if(ptp_ch < 0 || ptp_ch > 3)
+				{
+					fprintf(stderr,"Invalid cpts channel id: %d\n",ptp_ch);
+					continue;
+				}
+
+				cpts_channel_write(&cpts_channels[ptp_ch],ptp_ts);
+			}
 		}
 	}
-
 	// close write side of the cpts pipes to wake readers
 	cpts_disable_channels();
 	return NULL;
@@ -1674,9 +1705,9 @@ void close_rtio()
 	close_cpts_channels();
 }
 
-struct ts_channel *get_ts_channel(int timer_idx)
+struct ts_channel *get_ts_channel(int channel_idx)
 {
-	switch(timer_idx)
+	switch(channel_idx)
 	{
 		case -7:
 			return &cpts_channels[3].ts_ch;
@@ -1778,6 +1809,29 @@ int start_icap_logging(int timer_idx, int verbose)
 }
 
 
+struct dmtimer *get_dmtimer(int dmtimer_idx)
+{
+	switch(dmtimer_idx)
+	{
+		case 4:
+			return &dmts[0];
+			break;
+		case 5:
+			return &dmts[1];
+			break;
+		case 6:
+			return &dmts[2];
+			break;
+		case 7:
+			return &dmts[3];
+			break;
+		default:
+			return NULL;
+	}
+	return NULL;
+}
+
+
 int start_npps_generator(int icap_timer_idx, int pwm_timer_idx, uint32_t pps_period_ms, uint32_t hw_prescaler, int verbose_level)
 {
 	struct nPPS_servo_t *npps;
@@ -1799,12 +1853,13 @@ int start_npps_generator(int icap_timer_idx, int pwm_timer_idx, uint32_t pps_per
 		return -1;
 	}
 
-	if(pwm_timer_idx < 4 || pwm_timer_idx > 7)
+	d = get_dmtimer(pwm_timer_idx);
+	if(!d)
 	{
 		fprintf(stderr,"Invalid dmtimer index.\n");
 		return -1;
 	}
-	d = &dmts[pwm_timer_idx-4];
+	
 	if(!d->enable_oc)
 	{
 		fprintf(stderr,"Timer is not in PWM mode.\n");
@@ -1875,7 +1930,8 @@ int start_pps_generator(int ts_channel_idx, int pwm_timer_idx, int verbose_level
 		return -1;
 	}
 
-	if(pwm_timer_idx < 4 || pwm_timer_idx > 7)
+	d = get_dmtimer(pwm_timer_idx);
+	if(!d)
 	{
 		fprintf(stderr,"Invalid dmtimer index.\n");
 		return -1;

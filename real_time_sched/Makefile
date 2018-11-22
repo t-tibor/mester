@@ -1,12 +1,15 @@
 BB_CC="/home/tibi/dipterv/bb-kernel-ti-rt/ti-linux-kernel-dev/dl/gcc-linaro-7.3.1-2018.05-x86_64_arm-linux-gnueabihf/bin/arm-linux-gnueabihf-gcc"
 
-all: ./bin/mem_lock ./bin/sched_deadline ./bin/periodic_rt_task ./bin/timer_create
+all: ./bin/mem_lock ./bin/sched_deadline ./bin/periodic_rt_task ./bin/timer_create ./bin/sched_jitter
 
 
 ./bin/mem_lock: mem_lock.c
 	$(BB_CC) -o ./bin/mem_lock mem_lock.c -pthread
 
-./bin/sched_deadline: sched_deadline.c gpio_uapi.c
+./bin/sched_deadline: sched_deadline.c
+	$(BB_CC) -o $@ $^ -lrt -pthread
+
+./bin/sched_jitter: sched_jitter.c
 	$(BB_CC) -o $@ $^ -lrt -pthread
 
 ./bin/periodic_rt_task: periodic_rt_task.c gpio_uapi.c
