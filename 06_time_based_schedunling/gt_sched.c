@@ -51,10 +51,10 @@ module_param(system_period_ns, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
 MODULE_PARM_DESC(system_period_ns, "System period [ns]");
 
 
-
-#define TASK_STATE_WAITING 	0
-#define TASK_STATE_RUNNING 	1
-#define TASK_STATE_OVERRUN 	2
+#define TASK_STATE_NORMAL 	0
+#define TASK_STATE_WAITING 	1
+#define TASK_STATE_RUNNING 	2
+#define TASK_STATE_OVERRUN 	3
 
 /*
 struct time_slice
@@ -67,6 +67,7 @@ struct time_slice
 
 struct sched_gt_entity
 {
+	int frequency;
 	u32 offset_ns;
 	u32 length_ns;
 	int task_state;
@@ -87,6 +88,25 @@ LIST_HEAD(slice_list);
 DEFINE_MUTEX(slice_list_lock);
 
 
+void show_timeslices(void)
+{
+	struct time_slice *tmp;
+	u32 from;
+	u32 to;
+	struct task_struct *task;
+
+	mutex_lock(&slice_list_lock);
+
+	list_for_each_entry(tmp, &slice_list, list)
+	{
+		from = tmp->from;
+		to = tmp->to;
+		task = tmp->user;
+		pr_info("[GT SLICES] Used slice by %u - from:%uus, to:%uus\n",task->pid, from/1000,to/1000);
+	}
+
+	mutex_unlock(&slice_list_lock);
+}
 
 
 
@@ -137,19 +157,22 @@ int sleep_until(struct timespec64 *ts)
 	return ret;
 }
 
-
-
-
-
-struct time_slice* alloc_time_slice(struct task_struct *task, u32 from, u32 to)
+struct sched_gt_entity* task2sched_gt_entity(struct task_struct *task)
 {
-	struct time_slice *tmp, *new_slice, *ret;
-	struct list_head *next_elem;
+	return &task->gt;
+}
+
+
+
+int _is_timeslice_free(u32 from, u32 to)
+{
+	struct time_slice *tmp;
 	int ok;
-	
-	mutex_lock(&slice_list_lock);
+
+	if(to <= from) return 0;
+	if(to > system_period_ns) return 0;
+
 	ok = 1;
-	next_elem = &slice_list;
 	list_for_each_entry(tmp, &slice_list, list)
 	{
 		if(tmp->to <= from) continue;
@@ -159,80 +182,189 @@ struct time_slice* alloc_time_slice(struct task_struct *task, u32 from, u32 to)
 			ok = 0;
 			break;
 		}
-		next_elem = &tmp->list;
-		break; 
-	}
-	if(!ok)
-	{
-		ret = NULL;
-		goto out;
+		else
+		{
+			break;
+		}
 	}
 
-	new_slice = (struct time_slice*)kmalloc(sizeof(struct time_slice),GFP_KERNEL);
-	if(!new_slice)
-	{
-		ret = NULL;
-		goto out;
-	}
-	new_slice->from = from;
-	new_slice->to = to;
-	new_slice->user = task;
-	INIT_LIST_HEAD(&(new_slice->list));
-	list_add_tail(&new_slice->list,next_elem);
-	ret = new_slice;
-
-out:
-	mutex_unlock(&slice_list_lock);
-	return ret;
+	return ok;
 }
 
-int release_time_slice(struct time_slice *slice)
+int _add_time_slice(struct time_slice *s)
 {
-	if(!slice) return 0;
-	mutex_lock(&slice_list_lock);
-	list_del(&slice->list);
-	slice->user->gt.slice = NULL;
-	mutex_unlock(&slice_list_lock);
-	kfree(slice);
+	struct time_slice *tmp;
+	struct list_head *next_elem;
+	u32 from,to;
+
+	from = s->from;
+	to = s->to;
+
+	next_elem = &slice_list;
+	list_for_each_entry(tmp, &slice_list, list)
+	{
+		if(tmp->from > from)
+		{
+			next_elem = &tmp->list;
+			break;
+		}
+	}
+
+	list_add_tail(&s->list,next_elem);
 	return 0;
 }
 
-
-void sched_gt_entity_init(struct sched_gt_entity *sg)
+int _remove_time_slice(struct time_slice *slice)
 {
-	if(!sg) return;
-	sg->offset_ns = 0;
-	sg->length_ns = 0;
-	sg->task_state = TASK_STATE_WAITING;
-	sg->slice = NULL;
-	sg->last_wake.tv_sec = 0;
-	sg->last_wake.tv_nsec = 0;
-	mutex_init(&sg->lock);
-	hrtimer_init(&sg->wdg_timer, CLOCK_REALTIME, HRTIMER_MODE_ABS);
-	sg->wdg_timer.function = wdg_timer_callb_func;
+	if(!slice) return 0;
+	list_del(&slice->list);
+	return 0;
 }
 
-void sched_gt_entity_deinit(struct sched_gt_entity *sg)
+int release_bandwidth(struct sched_gt_entity *gt)
 {
-	if(sg->slice)
+	int i;
+
+	if(gt->slices)
 	{
-		release_time_slice(sg->slice);
-		sg->slice = NULL;
+		mutex_lock(&slice_list_lock);
+		for(i = 0; i < gt->frequency; i++)
+		{
+			_remove_time_slice(&gt->slices[i]);
+		}
+		mutex_unlock(&slice_list_lock);
+		kfree(gt->slices);
+		gt->slices = NULL;
 	}
-	mutex_destroy(&sg->lock);
-	hrtimer_cancel(&sg->wdg_timer);
+	return 0;
 }
 
-struct sched_gt_entity* task2sched_gt_entity(struct task_struct *task)
+int alloc_bandwidth(struct task_struct *task)
 {
-	return &task->gt;
+	struct time_slice *slice;
+	u32 frequency;
+	u32 offset;
+	u32 length;
+	u32 task_period_ns;
+	u32 from,to;
+	unsigned i, ok;
+
+	struct sched_gt_entity *gt = task2sched_gt_entity(task);
+	
+	frequency = gt->frequency;
+
+	if(frequency == 0)
+	{
+		pr_err("Invalid 0 frequency.\n");
+		return -EINVAL;
+	}
+
+	task_period_ns = system_period_ns / frequency;
+
+	offset = gt->offset_ns;
+	length = gt->length_ns;
+
+	if(length == 0)
+	{
+		pr_err("Invalid 0 length.\n");
+		return -EINVAL;
+	}
+
+	if(gt->slices)
+	{
+		pr_err("Task has already allocated timeslices.\n");
+		return -EINVAL;
+	}
+
+	mutex_lock(&slice_list_lock);
+	ok = 1;
+	for(i=0;i<frequency && ok;i++)
+	{
+		from = offset + i*task_period_ns;
+		to = offset + i*task_period_ns + length;
+		if(!_is_timeslice_free(from, to))
+		{
+			ok = 0;
+			pr_info("Cannot allocate timeslice from: %u, to: %u.\n", from, to);
+		}
+	}
+
+	if(ok)
+	{
+		gt->slices = (struct time_slice*)kmalloc(sizeof(struct time_slice) * frequency,GFP_KERNEL);
+		if(!gt->slices)
+		{
+			pr_err("Cannot allocate memory for slice array.\n");
+			return -1;
+		}
+
+		// alloc bandwidth
+		for(i=0;i<frequency;i++)
+		{
+			slice = &gt->slices[i];
+			slice->from = offset + i*task_period_ns;
+			slice->to = offset + i*task_period_ns + length;
+			slice->user = task;
+			INIT_LIST_HEAD(&slice->list);
+			_add_time_slice(slice);
+			pr_info("Bandwidth allocated: from: %u, to:%u.\n",slice->from, slice->to);
+		}
+		
+	}
+
+	mutex_unlock(&slice_list_lock);
+
+	show_timeslices();
+
+	return (ok==1) ? 0 : -EINVAL;
 }
 
 
 
 
+int _enter_high_prio_mode(struct task_struct *task)
+{
+	struct sched_param param;
+	param.sched_priority = GOOD_TASK_PRIO;
+    if(sched_setscheduler(task, SCHED_FIFO, &param) != 0)
+    {
+        pr_err("Cannot setup normal thread priority.\n");
+        return -1;
+    }
+    return 0;
+}
 
-/* ---------------------- TASK INTERFACE ----------------------- */
+int _enter_bad_task_mode(struct task_struct *task)
+{
+	struct sched_gt_entity *gt;
+	struct sched_param param;
+	// downgrade task priority
+	gt = task2sched_gt_entity(task);
+ 	param.sched_priority = BAD_TASK_PRIO;
+    if(sched_setscheduler(task, SCHED_RR, &param) != 0)
+    {
+        return -1;
+    }	
+    gt->task_state = TASK_STATE_OVERRUN;
+    return 0;
+
+}
+
+int _enter_normal_mode(struct task_struct *task)
+{
+	struct sched_gt_entity *gt;
+	struct sched_param param;
+	gt = task2sched_gt_entity(task);
+
+	param.sched_priority = 0;
+	if(sched_setscheduler(task, SCHED_NORMAL, &param) != 0)
+    {
+        return -1;
+    }	
+    gt->task_state = TASK_STATE_NORMAL;
+    return 0;
+}
+
 
 enum hrtimer_restart wdg_timer_callb_func(struct hrtimer *timer)
 {
@@ -244,72 +376,104 @@ enum hrtimer_restart wdg_timer_callb_func(struct hrtimer *timer)
 	return HRTIMER_NORESTART;
 }
 
-int alloc_bandwidth(struct task_struct *task)
-{
-	struct time_slice *slice;
-	
-	struct sched_gt_entity *gt = task2sched_gt_entity(task);
-	slice = alloc_time_slice(task,gt->offset_ns, gt->offset_ns+gt->length_ns);
-	task->gt.slice = slice;
-
-	#ifdef DEBUG
-	if(slice != NULL)
-	{
-		pr_info("Bandwidth allocated: from: %u, to:%u.\n",slice->from, slice->to);
-	}
-	else
-	{
-		pr_info("Cannot allocate bandwidth: offset: %u, length:%u.\n",gt->offset_ns, gt->length_ns);
-	}
-	#endif
-	return (slice == NULL);
-}
 
 
 int task_enter_sched_gt(struct task_struct *task)
 {
 	int ret;
-	struct sched_param param;
+	struct sched_gt_entity *gt;
 
 	ret = alloc_bandwidth(task);
 
 	if(!ret)
 	{
-		param.sched_priority = GOOD_TASK_PRIO;
-	    if(sched_setscheduler(task, SCHED_FIFO, &param) != 0)
-	    {
-	        pr_err("Cannot setup normal thread priority.\n");
-	    }
-	    ret = 0;	
-	}
-	else
-	{
-		ret = -1;
+		gt = task2sched_gt_entity(task);
+		mutex_lock(&gt->lock);
+		ret = _enter_bad_task_mode(task);
+		mutex_unlock(&gt->lock);
 	}
     return ret;
 }
+
+int task_leave_sched_gt(struct task_struct *task)
+{
+	struct sched_gt_entity *gt;
+	int ret;
+
+	gt = task2sched_gt_entity(task);
+
+	release_bandwidth(gt);
+
+	mutex_lock(&gt->lock);
+	ret = _enter_normal_mode(task);
+	mutex_unlock(&gt->lock);
+
+	return ret;
+}
+
+
+
+
+void sched_gt_entity_init(struct sched_gt_entity *sg)
+{
+	if(!sg) return;
+	sg->frequency = 0;
+	sg->period_ns = 0;
+	sg->offset_ns = 0;
+	sg->length_ns = 0;
+	sg->task_state = TASK_STATE_NORMAL;
+	sg->slices = NULL;
+	sg->last_wake.tv_sec = 0;
+	sg->last_wake.tv_nsec = 0;
+	mutex_init(&sg->lock);
+	hrtimer_init(&sg->wdg_timer, CLOCK_REALTIME, HRTIMER_MODE_ABS);
+	sg->wdg_timer.function = wdg_timer_callb_func;
+}
+
+void sched_gt_entity_deinit(struct sched_gt_entity *sg)
+{
+	hrtimer_cancel(&sg->wdg_timer);
+
+	sg->frequency = 0;
+	sg->period_ns = 0;
+	sg->offset_ns = 0;
+	sg->length_ns = 0;
+	sg->task_state = TASK_STATE_NORMAL;
+	sg->slices = NULL;
+	sg->last_wake.tv_sec = 0;
+	sg->last_wake.tv_nsec = 0;
+	mutex_destroy(&sg->lock);
+}
+
+
 
 
 struct timespec64 calc_next_wake_time(struct sched_gt_entity *gt)
 { 
 	struct timespec64 now, delta, wake_time;
 	ktime_t t;
-	u64 t2;
+	u64 t2,t3;
 	u32 mod;
+	u32 task_period_ns;
 
 	getnstimeofday64(&now);
-	timespec64_add_ns(&now,500000ULL);
+	timespec64_add_ns(&now,200000ULL);
 	delta = timespec64_sub(now,gt->last_wake);
 
-	if( timespec64_to_ns(&delta) > 10*system_period_ns)
+	task_period_ns = gt->period_ns;
+
+	if( timespec64_to_ns(&delta) > 10*task_period_ns)
 	{
 		//recalculate
 		t = timespec64_to_ns(&now);
-		t += system_period_ns;
-		t -= (u64)gt->offset_ns;
 		t2 = (u64)t;
 		mod = do_div(t2,system_period_ns);
-		t = t - mod;
+		// t - start of the current system period
+		t3 = mod;
+		mod = do_div(t3, task_period_ns);
+
+		t -= mod;
+		t += task_period_ns;
 		t += (u64)gt->offset_ns;
 		wake_time = ns_to_timespec64(t);
 	}
@@ -318,7 +482,7 @@ struct timespec64 calc_next_wake_time(struct sched_gt_entity *gt)
 		wake_time = gt->last_wake;
 		while( timespec64_compare(&wake_time, &now) < 0)
 		{
-			timespec64_add_ns(&wake_time,system_period_ns);
+			timespec64_add_ns(&wake_time,task_period_ns);
 		}
 	}
 	
@@ -346,13 +510,7 @@ int task_sched_gt_wait_for_next(void)
 
 	if(gt->task_state == TASK_STATE_OVERRUN)
 	{
-		struct sched_param param;
-		// change the priority back
-		param.sched_priority = GOOD_TASK_PRIO;
-	    if(sched_setscheduler(current, SCHED_FIFO, &param) != 0)
-	    {
-	        pr_err("Cannot set thread priority back to normal.\n");
-	    }
+		_enter_high_prio_mode(current);
 	}
 	gt->task_state = TASK_STATE_WAITING;
 	mutex_unlock(&gt->lock);
@@ -487,13 +645,7 @@ int wdg_thread_fn(void *arg)
 	 	mutex_lock(&gt->lock);
 	 	if(gt->task_state == TASK_STATE_RUNNING)
 	 	{
-	 		// downgrade task priority
-		 	param.sched_priority = BAD_TASK_PRIO;
-	 	    if(sched_setscheduler(bad_task, SCHED_FIFO, &param) != 0)
-		    {
-		        success = 0;
-		    }	
-		    gt->task_state = TASK_STATE_OVERRUN;
+	 		success = !_enter_bad_task_mode(bad_task);
 	 	}
 	 	mutex_unlock(&gt->lock);
 
@@ -526,8 +678,8 @@ static ssize_t sched_gt_open(struct inode *inode, struct file *pfile)
 static int sched_gt_close (struct inode *inode, struct file *pfile)
 {
 	struct sched_gt_entity *gt;
-
 	gt = task2sched_gt_entity(current);
+	task_leave_sched_gt(current);
 	sched_gt_entity_deinit(gt);
 	module_put(THIS_MODULE);
 	return 0;
@@ -536,8 +688,11 @@ static int sched_gt_close (struct inode *inode, struct file *pfile)
 #define SCHED_GT_IOCTL_MAGIC	'@'
 #define IOCTL_SET_OFFSET			_IO(SCHED_GT_IOCTL_MAGIC,1)
 #define IOCTL_SET_LENGTH 			_IO(SCHED_GT_IOCTL_MAGIC,2)
-#define IOCTL_WAIT_NEXT 			_IO(SCHED_GT_IOCTL_MAGIC,3)
-#define TIMER_IOCTL_MAX				3
+#define IOCTL_SET_FREQUENCY 		_IO(SCHED_GT_IOCTL_MAGIC,3)
+#define IOCTL_ENTER_SCHED_GT 		_IO(SCHED_GT_IOCTL_MAGIC,4)
+#define IOCTL_LEAVE_SCHED_GT 		_IO(SCHED_GT_IOCTL_MAGIC,5)
+#define IOCTL_WAIT_NEXT 			_IO(SCHED_GT_IOCTL_MAGIC,6)
+#define TIMER_IOCTL_MAX				6	
 static long sched_gt_ioctl(struct file *pfile, unsigned int cmd, unsigned long arg)
 {
 	int ret = 0;
@@ -552,26 +707,75 @@ static long sched_gt_ioctl(struct file *pfile, unsigned int cmd, unsigned long a
 	switch(cmd)
 	{
 		case IOCTL_SET_OFFSET:
-			gt->offset_ns = arg*1000000UL;	
-			ret = 0;
+			if(gt->task_state == TASK_STATE_NORMAL)
+			{
+				gt->offset_ns = arg*1000000UL;	
+				ret = 0;
+			}
+			else
+			{
+				ret = -EINVAL;
+			}
+
 			break;
 		case IOCTL_SET_LENGTH:
-			gt->length_ns = arg*1000000UL;
-			ret = 0;
-			break;
-		case IOCTL_WAIT_NEXT:
-			if(gt->slice == NULL)
+			if(gt->task_state == TASK_STATE_NORMAL)
 			{
-				// enter sched_gt
+				gt->length_ns = arg*1000000UL;
+				ret = 0;
+			}
+			else
+			{
+				ret = -EINVAL;
+			}
+			break;
+		case IOCTL_SET_FREQUENCY:
+			if(gt->task_state == TASK_STATE_NORMAL)
+			{
+				gt->frequency = arg;
+				gt->period_ns = (u32)system_period_ns / (u32)arg;
+				ret = 0;
+			}
+			else
+			{
+				ret = -EINVAL;
+			}
+			break;
+		case IOCTL_ENTER_SCHED_GT:
+			if(gt->task_state == TASK_STATE_NORMAL)
+			{
 				ret = task_enter_sched_gt(task);
+			}
+			else
+			{
+				ret = -EINVAL;
+			}
+			break;
+		case IOCTL_LEAVE_SCHED_GT:
+			if(gt->task_state != TASK_STATE_NORMAL)
+			{
+				ret = task_leave_sched_gt(task);
 				if(ret)
 				{
+					pr_err("Cannot leave sched gt mode \n.");
 					ret = -EINVAL;
-					break;
 				}
 			}
-			task_sched_gt_wait_for_next();
-			ret = 0; // TODO
+			else
+			{
+				ret = -EINVAL;
+			}
+			break;
+		case IOCTL_WAIT_NEXT:
+			if(gt->task_state != TASK_STATE_NORMAL)
+			{
+				task_sched_gt_wait_for_next();
+				ret = 0;
+			}
+			else
+			{
+				ret = -EINVAL;
+			}
 			break;
 		default:
 			pr_err("Invalid IOCTL command : %d.\n",cmd);

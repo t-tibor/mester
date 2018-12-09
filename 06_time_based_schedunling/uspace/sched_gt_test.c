@@ -15,35 +15,39 @@
 
 #define SCHED_GT_PATH 	"/dev/sched_gt"
 
-#define TIMER_IOCTL_MAGIC	'@'
-#define IOCTL_SET_OFFSET			_IO(TIMER_IOCTL_MAGIC,1)
-#define IOCTL_SET_LENGTH 			_IO(TIMER_IOCTL_MAGIC,2)
-#define IOCTL_WAIT_NEXT 			_IO(TIMER_IOCTL_MAGIC,3)
+#define SCHED_GT_IOCTL_MAGIC	'@'
+#define IOCTL_SET_OFFSET			_IO(SCHED_GT_IOCTL_MAGIC,1)
+#define IOCTL_SET_LENGTH 			_IO(SCHED_GT_IOCTL_MAGIC,2)
+#define IOCTL_SET_FREQUENCY 		_IO(SCHED_GT_IOCTL_MAGIC,3)
+#define IOCTL_ENTER_SCHED_GT 		_IO(SCHED_GT_IOCTL_MAGIC,4)
+#define IOCTL_LEAVE_SCHED_GT 		_IO(SCHED_GT_IOCTL_MAGIC,5)
+#define IOCTL_WAIT_NEXT 			_IO(SCHED_GT_IOCTL_MAGIC,6)
 
 
-void busy_wait(uint32_t delay)
+void busy_wait(uint32_t delay_us)
 {
 	struct timespec start,now;
-	uint32_t delta;
+	uint32_t delta_us;
 
 	clock_gettime(CLOCK_THREAD_CPUTIME_ID,&start);
 
 	do
 	{
 		clock_gettime(CLOCK_THREAD_CPUTIME_ID,&now);
-		delta = (now.tv_sec - start.tv_sec)*1000000ULL;
-		delta += now.tv_nsec/1000;
-		delta -= start.tv_nsec/1000;
-	}while(delta < delay);
+		delta_us = (now.tv_sec - start.tv_sec)*1000000ULL;
+		delta_us += now.tv_nsec/1000;
+		delta_us -= start.tv_nsec/1000;
+	}while(delta_us < delay_us);
 }
 
 
 int main(int argc, char**argv)
 {
 	int arg;
+	unsigned frequency = 1;
 	unsigned offset = 3;
 	unsigned alloc = 2;
-	unsigned comp = 1;
+	unsigned comp = 1000;
 
 	int fid;
 	int ret;
@@ -54,14 +58,15 @@ int main(int argc, char**argv)
 	/* Processing the command line arguments */
 	if(argc > 1)
 	{
-		while(EOF != (arg = getopt(argc, argv, "o:a:c:")))
+		while(EOF != (arg = getopt(argc, argv, "o:a:c:f:")))
 		{
 			switch(arg)
 			{
-			case 'o' : offset 	= atoi(optarg); break;
-			case 'a' : alloc 	= atoi(optarg); break;
-			case 'c' : comp 	= atoi(optarg); break;
-			default : printf("Usage: \n\t-o: Set task offset[ms]\n\t-a: Allocated bandwidth.\n\t-c: Computation time.\n\n");
+			case 'f' : frequency 	= atoi(optarg); break;
+			case 'o' : offset 		= atoi(optarg); break;
+			case 'a' : alloc 		= atoi(optarg); break;
+			case 'c' : comp 		= atoi(optarg); break;
+			default : printf("Usage: \n\t-f: Task cycles per system period.\n\t-o: Set task offset[ms]\n\t-a: Allocated bandwidth.\n\t-c: Computation time [usec].\n\n");
 						return 0;
 			}
 		}
@@ -72,9 +77,14 @@ int main(int argc, char**argv)
 		fprintf(stderr,"System period is 20 ms. offset + length should be less than that.\n");
 		return -1;
 	}
-	if(comp >= 20)
+	if(comp >= 20000)
 	{
-		fprintf(stderr,"Too big computation time: %u. Use one bellow 20 msec.\n",comp);
+		fprintf(stderr,"Too big computation time: %u. Use one bellow 20000 usec.\n",comp);
+		return -1;
+	}
+	if(frequency < 1 || frequency > 20)
+	{
+		fprintf(stderr,"Frequency should be between 1 and 20.\n");
 		return -1;
 	}
 
@@ -87,6 +97,13 @@ int main(int argc, char**argv)
 	}	
 
 	// set offset to 5 msec
+	ret = ioctl(fid, IOCTL_SET_FREQUENCY,frequency);
+	if(ret)
+	{
+		fprintf(stderr,"Cannot set frequency.\n");
+		return -2;
+	}
+	printf("Frequency setting OK.\n");
 	ret = ioctl(fid, IOCTL_SET_OFFSET,offset);
 	if(ret)
 	{
@@ -101,11 +118,20 @@ int main(int argc, char**argv)
 		return -3;
 	}
 	printf("Length setting OK.\n");
+
+	ret = ioctl(fid, IOCTL_ENTER_SCHED_GT);
+	if(ret)
+	{
+		fprintf(stderr,"Cannot enter sched GT\n");
+		return -1;
+	}
+	printf("Entered to SCHED GT.\n");
+	printf("Waiting for the next cycle.\n");
 	ret = ioctl(fid, IOCTL_WAIT_NEXT);
 	clock_gettime(CLOCK_REALTIME,&ts);
 	if(ret)
 	{
-		fprintf(stderr,"Cannot allocate bandwidth\n");
+		fprintf(stderr,"Error during waiting for the next cycle.\n");
 		return -1;
 	}
 	printf("Waiting survived. :) \n");
@@ -121,11 +147,15 @@ int main(int argc, char**argv)
 			printf("32 waiting is OK.\n");
 			printf("Wake: %ldsec,%ldnsec\n",ts.tv_sec, ts.tv_nsec);
 		}
-		busy_wait(comp*1000);
+		busy_wait(comp);
 	}
 
-	printf("SCHED GT TEST finished.\n");
-
+	printf("SCHED GT TEST finished.\nLeavgin SCHED GT.\n");
+	ret = ioctl(fid, IOCTL_LEAVE_SCHED_GT);
+	if(ret)
+	{
+		fprintf(stderr,"Cannot leave sched GT\n");
+	}
 	close(fid);
 
 	return 0;
