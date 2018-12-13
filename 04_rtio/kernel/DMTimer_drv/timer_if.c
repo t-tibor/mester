@@ -381,10 +381,12 @@ static void destroy_icap_interface(struct DMTimer_priv *timer)
 	timer->icap = NULL;
 }
 
+
+#ifdef USE_XENOMAI
 // init additional rtdm udd interface
 int init_xeno_interface(struct DMTimer_priv *timer)
 {
-#ifdef USE_XENOMAI
+
 	struct udd_device *udd = &timer->udd;
 	int ret;
 
@@ -415,21 +417,18 @@ int init_xeno_interface(struct DMTimer_priv *timer)
 
 	return ret;
 
-#else
-	return -1;
-#endif
 }
 
 static void destroy_xeno_interface(struct DMTimer_priv *timer)
 {
-#ifdef USE_XENOMAI
 	if(timer->udd_registered == 1)
 	{
 		udd_unregister_device(&timer->udd);
 		timer->udd_registered = 0;
 	}
-#endif
 }
+
+#endif
 
 
 
@@ -501,22 +500,22 @@ static int timer_probe(struct platform_device *pdev)
 	struct DMTimer_priv *timer;
 
 	uint8_t icap_mode;
-	uint8_t pwm_mode;
+	uint8_t xeno_pwm_mode;
 	int ret;
 
 
 	icap_mode = 0;
-	pwm_mode = 0;
+	xeno_pwm_mode = 0;
 	// read up dmtimer mode
 	if (of_get_property(pdev->dev.of_node, "ext,icap-mode", NULL)) 
 		icap_mode = 1;
 
-	if (of_get_property(pdev->dev.of_node, "ext,pwm-mode", NULL)) 
-		pwm_mode = 1;
+	if (of_get_property(pdev->dev.of_node, "ext,xenomai-pwm", NULL)) 
+		xeno_pwm_mode = 1;
 
-	if((1 == pwm_mode) && (1 == icap_mode))
+	if((1 == xeno_pwm_mode) && (1 == icap_mode))
 	{
-		dev_err(&pdev->dev,"%s:%d: Cannot set both icap and pwm mode on dmtimer.\n",__func__,__LINE__);
+		dev_err(&pdev->dev,"%s:%d: Cannot set both icap and xeno-pwm mode on dmtimer.\n",__func__,__LINE__);
 		return -EINVAL;
 	}
 
@@ -545,9 +544,13 @@ static int timer_probe(struct platform_device *pdev)
 	{
 		ret = init_icap_interface(timer);
 	}
-	else if(1 == pwm_mode)
+	else if(1 == xeno_pwm_mode)
 	{
+		#ifdef USE_XENOMAI
 		ret = init_xeno_interface(timer);
+		#else
+		pr_warn("DMTimer set to XENOMAI PWM mode, but the driver does not support it. Rebuild it with the 'USE_XENOMAI' define.\n");
+		#endif
 	}
 
 	if(ret)
@@ -558,7 +561,11 @@ static int timer_probe(struct platform_device *pdev)
 
 
 	dev_info(&pdev->dev,"%s initialization succeeded.\n",timer->name);
+	#ifdef USE_XENOMAI
 	dev_info(&pdev->dev,"Base address: 0x%lx, length: %u, irq num: %d, icap channel %s, pwm channel %s.\n",timer->regspace_phys_base,timer->regspace_size,timer->irq, (timer->icap) ? "enabled" : "disabled", (timer->udd_registered) ? "enabled" : "disabled");
+	#else
+	dev_info(&pdev->dev,"Base address: 0x%lx, length: %u, irq num: %d, icap channel %s.\n",timer->regspace_phys_base,timer->regspace_size,timer->irq, (timer->icap) ? "enabled" : "disabled");
+	#endif
 
  	platform_set_drvdata(pdev,timer);
 
@@ -598,7 +605,7 @@ static int timer_remove(struct platform_device *pdev)
 
 
 static struct of_device_id timer_of_match[] = {
-	{ .compatible = "ti,am335x-timer", },
+	{ .compatible = "my,am335x-timer", },
 	{ }
 };
 

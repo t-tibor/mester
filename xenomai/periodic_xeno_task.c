@@ -13,6 +13,7 @@
 #include <alchemy/timer.h>
 #include <math.h>
 #include <errno.h>
+#include <signal.h>
 
 #include "rtdm/udd.h"
 #include "alchemy/pipe.h"
@@ -82,9 +83,9 @@ void do_periodic_work(struct xeno_systick_task *task, int event_cnt)
 
   gpio_toggle();
 
-  msg_len = sprintf(msg,"Event count: %d\n",event_cnt);
+  //msg_len = sprintf(msg,"Event count: %d\n",event_cnt);
 
-  xeno_task_log(task,msg,msg_len);
+  //xeno_task_log(task,msg,msg_len);
 }
 
 // called from primary mode
@@ -185,6 +186,10 @@ void xeno_periodic_task_runner(void *arg)
 
   fprintf(stderr,"[RT RUNNER] Starting real time service.\n");
 
+  // enabling mode switch warning signal for this thread
+  rt_task_set_mode(0,T_WARNSW, NULL);
+
+
 
   task->ops.rt_init(task);
   while(task->do_work)
@@ -196,6 +201,10 @@ void xeno_periodic_task_runner(void *arg)
     task->ops.do_work(task,buf); 
   }
   task->ops.rt_deinit(task);
+
+
+  // disabling mode switch warning signal for this thread
+  rt_task_set_mode(T_WARNSW, 0, NULL);
 
 
   __COBALT(ioctl(fd,UDD_RTIOC_IRQDIS));
@@ -306,6 +315,72 @@ void signal_handler(int sig)
 }
 
 
+
+
+// Mode switch monitor
+#include <sys/types.h>
+#include <pthread.h>
+#include <signal.h>
+#include <unistd.h>
+#include <execinfo.h>
+
+static const char *sigdebug_msg[] = {
+	[SIGDEBUG_UNDEFINED] = "latency: received SIGXCPU for unknown reason",
+	[SIGDEBUG_MIGRATE_SIGNAL] = "received signal",
+	[SIGDEBUG_MIGRATE_SYSCALL] = "invoked syscall",
+	[SIGDEBUG_MIGRATE_FAULT] = "triggered fault",
+	[SIGDEBUG_MIGRATE_PRIOINV] = "affected by priority inversion",
+	[SIGDEBUG_NOMLOCK] = "Xenomai: process memory not locked "
+	"(missing mlockall?)",
+	[SIGDEBUG_WATCHDOG] = "Xenomai: watchdog triggered "
+	"(period too short?)",
+};
+
+
+
+void sigdebug_handler(int sig, siginfo_t *si, void *context)
+{
+	const char fmt[] = "Mode switch (reason: %s), aborting. Backtrace:\n";
+	unsigned int cause = sigdebug_reason(si);
+	static char buffer[256];
+	static void *bt[200];
+	unsigned int n;
+
+	if (cause > SIGDEBUG_WATCHDOG)
+		cause = SIGDEBUG_UNDEFINED;
+
+	switch(cause) {
+	case SIGDEBUG_UNDEFINED:
+	case SIGDEBUG_NOMLOCK:
+	case SIGDEBUG_WATCHDOG:
+		/* These errors are lethal, something went really wrong. */
+		n = snprintf(buffer, sizeof(buffer),
+			     "%s\n", sigdebug_msg[cause]);
+		write(STDERR_FILENO, buffer, n);
+		exit(EXIT_FAILURE);
+	}
+
+	/* Retrieve the current backtrace, and decode it to stdout. */
+	n = snprintf(buffer, sizeof(buffer), fmt, sigdebug_msg[cause]);
+	n = write(STDERR_FILENO, buffer, n);
+	n = backtrace(bt, sizeof(bt)/sizeof(bt[0]));
+	backtrace_symbols_fd(bt, n, STDERR_FILENO);
+
+	signal(sig, SIG_DFL);
+	kill(getpid(), sig);
+}
+
+void setup_debug_signal()
+{
+    struct sigaction sa;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_sigaction = sigdebug_handler;
+    sa.sa_flags = SA_SIGINFO;
+    sigaction(SIGDEBUG, &sa, NULL);
+}
+
+
+
 int main()
 {
   pthread_t logger;
@@ -314,6 +389,7 @@ int main()
   mlockall(MCL_CURRENT | MCL_FUTURE);
 
   signal(SIGINT, signal_handler);
+  setup_debug_signal();
 
   printf("[MAIN] Starting xenomai system task...\n");
   xeno_periodic_task_start(&task, "Xeno_task","xeno_pipe",SYSTICK_DEVICE_PATH,&my_ops);

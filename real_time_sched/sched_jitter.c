@@ -118,78 +118,48 @@ int prio;
  {
 	struct sched_attr attr;
 	int ret;
-	unsigned int flags = 0;
-	struct timespec wake_time;
-	struct timespec work_end;
 	struct timespec now;
-	uint64_t ts;
-	int i;
+	int64_t prev;
+	int64_t tmp;
+	int64_t delta;
 
-	// compute first wake time
-	clock_gettime(CLOCK_REALTIME, &wake_time);
-	ts = (uint64_t)wake_time.tv_sec*1000000000ULL + (uint64_t)wake_time.tv_nsec;
-	i = ts % ((uint64_t)period_ms*1000000);
-	ts -= i;
-	// first wake will happen 2 periods after now
-	ts += (2*period_ms*1000000);
-	wake_time.tv_sec = ts/1000000000ULL;
-	wake_time.tv_nsec = ts % (1000000000ULL);
-	wake_time = timespec_add(wake_time, offset_ms*1000*1000);
 
 
 // setup scheduling class
 	memset(&attr, 0, sizeof(attr));
 	attr.size = sizeof(attr);
-	switch(sched)
-	{
-		case SCHED_F:
-			attr.sched_policy = SCHED_FIFO;
-			attr.sched_priority = prio;
-			break;
-		case SCHED_R:
-			attr.sched_policy = SCHED_RR;
-			attr.sched_priority = prio;
-			break;
-		case SCHED_D:
-			attr.sched_policy = SCHED_DEADLINE;
-			attr.sched_runtime =  ((uint64_t)runtime_ms)*1000*1000;
-			attr.sched_period = attr.sched_deadline = ((uint64_t)period_ms+100) * 1000 *1000;
-			break;
-		default:
-			fprintf(stderr,"Invalid sched value.\n");
-			exit(-1);
-	}
+	attr.sched_policy = SCHED_DEADLINE;
+	attr.sched_runtime =  ((uint64_t)runtime_ms)*1000*1000;
+	attr.sched_period = attr.sched_deadline = ((uint64_t)period_ms) * 1000 *1000;
 
 
-	ret = sched_setattr(0, &attr, flags);
+	ret = sched_setattr(0, &attr, 0);
 	if (ret < 0) {
 		done = 0;
 		perror("Cannot setup scheduling policy");
 		exit(-1);
 	}
 
+	// wait for the first whole second
+	clock_gettime(CLOCK_REALTIME, &now);
+	now.tv_sec += 2;
+	now.tv_nsec = 0;
+	clock_nanosleep(CLOCK_REALTIME, TIMER_ABSTIME, &now, NULL);
+
+	prev=0;
 	while (!done) 
 	{
-		int ret;
-		ret = clock_nanosleep(CLOCK_REALTIME, TIMER_ABSTIME, &wake_time, NULL); 
-		// sleep until the next period start
-		if(ret)
-		{
-			fprintf(stderr,"Termintaing the deadline thread. %d\n",ret);
-			exit(-1);
-		}
 
 		// do busy work for computation time parameter length
-		clock_gettime(CLOCK_THREAD_CPUTIME_ID, &now);
-		work_end = timespec_add(now,computation_time_ms*1000*1000);
-		do
+		clock_gettime(CLOCK_REALTIME, &now);
+		tmp = now.tv_sec*1000000000LL + now.tv_nsec;
+		delta = tmp - prev;
+		
+		if(delta > 10000000)
 		{
-			clock_gettime(CLOCK_THREAD_CPUTIME_ID, &now);
-
-		}while(timespec_before(now,work_end));
-
-		// work done wait for the next round
-		wake_time = timespec_add(wake_time, period_ms*1000*1000);
+			printf("Wake time: %usec %unsec.\n",now.tv_sec, now.tv_nsec);
+		}
+		prev = tmp;
 	}
  }
 

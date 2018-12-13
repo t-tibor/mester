@@ -4,10 +4,10 @@
 #include <inttypes.h>
 #include <string.h>
 
-#include "./servo/print.h"
-#include "./servo/config.h"
-#include "./servo/servo.h"
-#include "./servo/pi.h"
+#include "servo/print.h"
+#include "servo/config.h"
+#include "servo/servo.h"
+#include "servo/pi.h"
 
 
 #include "timekeeper.h"
@@ -173,7 +173,7 @@ int main(int argc, char **argv)
 	int64_t offset;
 	struct servo *s;
 	enum servo_state state ;
-	uint64_t servo_sync_offset;
+	int64_t servo_sync_offset;
 	char fout[256];
 	double dt;
 

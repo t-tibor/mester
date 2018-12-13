@@ -1,0 +1,62 @@
+--- /home/tibi/dipterv/bb-kernel-torvalds/KERNEL/include/linux/sched.h	2018-05-13 23:44:43.118815625 +0200
++++ /home/tibi/dipterv/bb-kernel-modified/KERNEL/include/linux/sched.h	2018-11-26 23:03:56.716247034 +0100
+@@ -27,6 +27,10 @@
+ #include <linux/mm_types_task.h>
+ #include <linux/task_io_accounting.h>
+ 
++// -------------------- MODIFIED BY TIBI ------------------
++#include <linux/time64.h>
++// ------------------------ END ---------------------------
++
+ /* task_struct member predeclarations (sorted alphabetically): */
+ struct audit_context;
+ struct backing_dev_info;
+@@ -498,6 +502,35 @@
+ 	struct wake_q_node *next;
+ };
+ 
++
++
++
++// -------------------------- MODIFICATION BY TIBI ---------------------------
++
++struct task_struct;
++
++struct time_slice{
++	u32 from;
++	u32 to;
++	struct task_struct *user;
++	struct list_head list;
++};
++
++struct sched_gt_entity{
++	u32 frequency;
++	
++	u32 period_ns;
++	u32 offset_ns;
++	u32 length_ns;
++	int task_state;
++	struct mutex lock;
++	struct hrtimer wdg_timer;
++	struct time_slice *slices;
++	struct timespec64 last_wake;
++};
++
++// --------------------------------- END -------------------------------------
++
+ struct task_struct {
+ #ifdef CONFIG_THREAD_INFO_IN_TASK
+ 	/*
+@@ -542,6 +575,12 @@
+ #endif
+ 	struct sched_dl_entity		dl;
+ 
++// ------------------- MODIFIED BY TIBI ---------------------
++	struct sched_gt_entity 		gt;
++// ------------------------ END ----------------------------
++
++
++
+ #ifdef CONFIG_PREEMPT_NOTIFIERS
+ 	/* List of struct preempt_notifier: */
+ 	struct hlist_head		preempt_notifiers;

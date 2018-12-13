@@ -15,10 +15,8 @@
 
 #include "icap_channel.h"
 #include "timekeeper.h"
-#include "icap_channel.h"
 #include "gpio.h"
-#include "./PPS_servo/BBonePPS.h"
-#include "./PPS_servo/PPS_servo.h"
+#include "PPS_servo/PPS_servo.h"
 #include "adc.h"
 #include "circ_buf.h"
 #include "utils.h"
@@ -63,10 +61,89 @@ void write8(volatile uint8_t *base, int offset, uint8_t val)
 
 
 
+// cpts timestamp channels
+struct cpts_channel cpts_channels[4];
 
+int ts_channel_cpts_read(struct ts_channel *ts_ch, uint64_t *buf, int len);
+int ts_channel_cpts_flush(struct ts_channel *ts_ch);
+int ts_channel_icap_read(struct ts_channel *ts_ch, uint64_t *buf, int len);
+int ts_channel_icap_flush(struct ts_channel *ts_ch);
+
+
+int create_cpts_channels()
+{
+	int pipefd[2];
+
+	for(int i=0;i<4;i++)
+	{
+		cpts_channels[i].idx = i+4;
+	    if (pipe(pipefd) == -1) 
+	    {
+	        fprintf(stderr,"Cannot create pipe for CPTS channel %d.\n",i+4);
+	        return -1;
+	    }
+	    cpts_channels[i].fd_read = pipefd[0];
+	    cpts_channels[i].fd_write = pipefd[1];
+	    // make write side nonblocking
+	    if(fcntl(pipefd[1],F_SETFL, O_NONBLOCK))
+	    	fprintf(stderr,"Cannot set O_NONBLOCK flag on the pipe.\n");
+
+	    cpts_channels[i].ts_ch.ch = &cpts_channels[i];
+	    cpts_channels[i].ts_ch.read = ts_channel_cpts_read;
+	    cpts_channels[i].ts_ch.flush = ts_channel_cpts_flush;
+
+	}
+	return 0;
+}
+
+int close_cpts_channels()
+{
+	for(int i=0;i<4;i++)
+	{
+		if(cpts_channels[i].fd_read)
+			close(cpts_channels[i].fd_read);
+
+		if(cpts_channels[i].fd_write)
+			close(cpts_channels[i].fd_write);
+
+		cpts_channels[i].fd_read = 0;
+		cpts_channels[i].fd_write = 0;
+	}
+	return 0;
+}
+
+int cpts_channel_write(struct cpts_channel *ch, uint64_t buf)
+{
+	write(ch->fd_write, &buf, sizeof(uint64_t));
+	return 0;
+}
+
+int cpts_channel_read(struct cpts_channel *ch, uint64_t *buf, int len)
+{
+	int count;
+
+	count = read(ch->fd_read, buf, len * sizeof(uint64_t));
+	if( (count % sizeof(uint64_t)) != 0 )
+		fprintf(stderr,"Invalid timestamp length from the pipe %d.\n",ch->idx);
+
+	return count / sizeof(uint64_t);
+}
+
+int cpts_disable_channels()
+{
+	for(int i=0;i<4;i++)
+	{
+		struct cpts_channel *ch = &cpts_channels[i];
+		if(ch->fd_write)
+		{
+			close(ch->fd_write);
+			ch->fd_write = 0;
+		}
+	}
+	return 0;
+}
 
 // input capture channels
-
 int open_channel(struct icap_channel *c, char *dev_path, int idx, int bit_cnt, int mult, int div)
 {
 	int ret;
@@ -100,6 +177,10 @@ int open_channel(struct icap_channel *c, char *dev_path, int idx, int bit_cnt, i
 
 	fprintf(stderr,"Setting channel bit count to %d.\n",bit_cnt);
 	ioctl(c->fdes,ICAP_IOCTL_SET_TS_BITNUM,bit_cnt);
+
+	c->ts_ch.ch = c;
+	c->ts_ch.read = ts_channel_icap_read;
+	c->ts_ch.flush = ts_channel_icap_flush;
 
 	return 0;
 }
@@ -160,6 +241,48 @@ void disable_channel(struct icap_channel *c)
 {
 	ioctl(c->fdes,ICAP_IOCTL_STORE_DIS);
 }
+
+
+// generic timestamp channel
+int ts_channel_icap_read(struct ts_channel *ts_ch, uint64_t *buf, int len)
+{
+	int cnt;
+	struct icap_channel *icap = (struct icap_channel*)ts_ch->ch;
+
+	cnt = read_channel(icap, buf,len);
+	timekeeper_convert(tk, buf, cnt);
+	return cnt;
+}
+
+int ts_channel_icap_flush(struct ts_channel *ts_ch)
+{
+	struct icap_channel *icap = (struct icap_channel*)ts_ch->ch;
+
+	flush_channel(icap);
+	return 0;
+}
+
+int ts_channel_cpts_read(struct ts_channel *ts_ch, uint64_t *buf, int len)
+{
+	int cnt;
+	struct cpts_channel *cch = (struct cpts_channel*)ts_ch->ch;
+
+	cnt =  cpts_channel_read(cch, buf,len);
+	return cnt;
+}
+
+int ts_channel_cpts_flush(struct ts_channel *ts_ch)
+{
+	(void)ts_ch;
+	return 0;
+}
+
+int ts_channel_read(struct ts_channel *ts, uint64_t *buffer, int size)
+{
+	if(!ts) return -1;
+	return ts->read(ts,buffer,size);
+}
+
 
 
 // // timer character device interface for the timers
@@ -235,8 +358,8 @@ struct dmtimer dmts[4]= {
 		.dev_path = "/dev/DMTimer5",
 		.icap_path = "/dev/dmtimer5_icap",
 		.idx = 5,
-		.load = 0xFF000000,
-		.match = 0xFF200000,
+		.load = DMTIMER5_LOAD_VALUE,
+		.match = (DMTIMER5_LOAD_VALUE + 0x200000),
 		.enabled = 1,
 		.enable_oc = 1,
 		.enable_icap = 1,
@@ -495,6 +618,17 @@ int dmtimer_pwm_set_period(struct dmtimer *t, uint32_t period)
 	return 0;
 }
 
+int dmtimer_pwm_set_duty(struct dmtimer *t, uint32_t period, uint32_t duty)
+{
+	uint32_t ld, match;
+	ld = 0xFFFFFFFF - period;
+	ld ++;
+	match = ld + (period*duty/100);
+
+	write32(t->dev.base, DMTIMER_TMAR, match);
+	return 0;
+}
+
 int dmtimer_pwm_setup(struct dmtimer *t, uint32_t period, uint32_t duty)
 {
 	uint32_t ld, match;
@@ -678,7 +812,7 @@ int ecap_set_prescaler(struct ecap_timer *e, unsigned char presc)
 // <------------------------------- CPTS interface ------------------------------->
 // <------------------------------------------------------------------------------>
 
-#include "ptp_clock.h"
+#include "PPS_servo/ptp_clock.h"
 
 #define PTP_DEVICE					"/dev/ptp0"
 #define TIMER5_HWTS_PUSH_INDEX		1 // HW2_TS_PUSH-1	
@@ -698,36 +832,36 @@ int ptp_open()
 	return 0;
 }
 
-int ptp_enable_hwts()
+int ptp_enable_hwts(int ch)
 {
 	struct ptp_extts_request extts_request;
 
-	// enable hardware timestamp generation for timer5
+	// enable hardware timestamp generation
 	memset(&extts_request, 0, sizeof(extts_request));
-	extts_request.index = TIMER5_HWTS_PUSH_INDEX;
+	extts_request.index = ch;
 	extts_request.flags = PTP_ENABLE_FEATURE;
 
 	if(ioctl(ptp_fdes, PTP_EXTTS_REQUEST, &extts_request))
 	{
-	   fprintf(stderr,"Cannot enable timer5 hardware timestamp requests. %m\n");
+	   fprintf(stderr,"Cannot enable HWTS_CHANNEL%d hardware timestamp requests. %m\n",ch);
 	   close(ptp_fdes);
 	   return -1;
 	}
 	return 0;
 }
 
-int ptp_disable_hwts()
+int ptp_disable_hwts(int ch)
 {
 	struct ptp_extts_request extts_request;
 
 	// enable hardware timestamp generation for timer5
 	memset(&extts_request, 0, sizeof(extts_request));
-	extts_request.index = TIMER5_HWTS_PUSH_INDEX;
+	extts_request.index = ch;
 	extts_request.flags = 0;
 
 	if(ioctl(ptp_fdes, PTP_EXTTS_REQUEST, &extts_request))
 	{
-	   fprintf(stderr,"Cannot disable Timer 5 HWTS generation.\n");
+	   fprintf(stderr,"Cannot disable Timer %d HWTS generation.\n",ch);
 	   return -1;
 	}
 	return 0;
@@ -735,43 +869,46 @@ int ptp_disable_hwts()
 
 void ptp_close()
 {
-	ptp_disable_hwts();
 	close(ptp_fdes);
+	ptp_fdes = 0;
 }
 
 
-int ptp_get_ts(struct timespec *ts)
+int ptp_get_ts(struct timespec *ts, int *channel, int len)
 {
-	struct ptp_extts_event extts_event[10];
+	struct ptp_extts_event extts_event[16];
 	int cnt;
+	int req_cnt = len < 16 ? len : 16;
 
-	cnt = read(ptp_fdes, extts_event, 2*sizeof(struct ptp_extts_event));
+	cnt = read(ptp_fdes, extts_event, req_cnt * sizeof(struct ptp_extts_event));
 	if(cnt < 0)
 	{
 		fprintf(stderr,"PTP read error: %s\n",strerror(errno));
 		return -1;
 	}
-	if(cnt == 0)
+	else if(cnt == 0)
 	{
 		return 0;
 	}
-	else if(cnt > (int)sizeof(struct ptp_extts_event))
+	else if( (cnt % sizeof(struct ptp_extts_event)) != 0 )
 	{
-		fprintf(stderr,"PTP timestamp accumulation.\n");
+		fprintf(stderr,"Broken PTP timestamp.\n");
+		return -1;
 	}
 	cnt /= sizeof(struct ptp_extts_event);
-	cnt--;
 
-	if(cnt < 0 ) return -1;
+	for(int i=0; i<cnt;i++)
+	{
+		ts[i].tv_sec  = extts_event[i].t.sec;
+		ts[i].tv_nsec = extts_event[i].t.nsec;
+		channel[i]    = extts_event[i].index;
+	}
 
-	ts->tv_sec = extts_event[cnt].t.sec;
-	ts->tv_nsec = extts_event[cnt].t.nsec;
-
-	return 1;
+	return cnt;
 }
 
 
-int rtio_quit = 0;
+volatile int rtio_quit = 0;
 
 pthread_t tk_thread;
 struct timekeeper *tk;
@@ -781,29 +918,16 @@ void *timekeeper_worker(void *arg)
 {
 	struct timekeeper *tk = (struct timekeeper*)arg;
 	uint64_t next_ts, ts_period;
-	struct timespec tspec;
+	struct timespec tspec[16];
+	int channel[16];
 	uint64_t ptp_ts;
+	int ptp_ch;
 	uint64_t hwts;
+	int rcvCnt;
+
 	// int pres = 0;
 
-
-	if(ptp_open())
-	{
-		fprintf(stderr,"Cannot open PTP device.\n");
-		return NULL;
-	}
-
 	next_ts = ts_period = (0xFFFFFFFF - trigger_timer->load)+1;
-
-
-	ptp_disable_hwts();
-
-	// enable timer HW_TS push events
-	if(ptp_enable_hwts())
-	{
-		fprintf(stderr,"Cannot enable HWTS generation.\n");
-		return NULL;
-	}
 
 	// increate thread priority
 	if(goto_rt_level(TIMEKEEPER_RT_PRIO))
@@ -814,23 +938,43 @@ void *timekeeper_worker(void *arg)
 	while(!rtio_quit)
 	{
 		// calc hwts times from timer 5 settings
-		ptp_get_ts(&tspec);
-		// if(pres == 0)
-		// 	printf("PTP time: %ld sec, %lunsec\n",tspec.tv_sec, tspec.tv_nsec);
-		// pres = (pres+1) & 0x3;
+		rcvCnt = ptp_get_ts(tspec,channel,16);
+		if(rcvCnt <=0 )
+		{
+			fprintf(stderr,"Cannot read CPTS timestamp.\n");
+			break;
+		}
 
-		ptp_ts = ((uint64_t)tspec.tv_sec*1000000000ULL)+tspec.tv_nsec;
+		// handle timestamps
+		for(int i=0;i<rcvCnt;i++)
+		{
+			ptp_ts = ((uint64_t)tspec[i].tv_sec*1000000000ULL)+tspec[i].tv_nsec;
+			ptp_ch = channel[i];
 
-		hwts = next_ts;
-		channel_do_conversion(&trigger_timer->channel,&hwts,1);
-		// send the new timestamp to the timekeeper
-		timekeeper_add_sync_point(tk, hwts, ptp_ts);
+			if(ptp_ch == TIMER5_HWTS_PUSH_INDEX)
+			{
+				// DMTimer5 HWTS are consumed by the timekeeper core
+				hwts = next_ts;
+				channel_do_conversion(&trigger_timer->channel,&hwts,1);
+				// send the new timestamp to the timekeeper
+				timekeeper_add_sync_point(tk, hwts, ptp_ts);
 
-		next_ts += ts_period;
+				next_ts += ts_period;
+			}
+			else // write timestamps to the pipes
+			{
+				if(ptp_ch < 0 || ptp_ch > 3)
+				{
+					fprintf(stderr,"Invalid cpts channel id: %d\n",ptp_ch);
+					continue;
+				}
+
+				cpts_channel_write(&cpts_channels[ptp_ch],ptp_ts);
+			}
+		}
 	}
-
-	ptp_close();
-
+	// close write side of the cpts pipes to wake readers
+	cpts_disable_channels();
 	return NULL;
 }
 
@@ -842,6 +986,8 @@ pthread_t workers[MAX_WORKER_COUNT];
 int worker_cnt = 0;
 
 
+// print events to stdout too
+int logger_verbose = 0;
 void *channel_logger(void *arg)
 {
 	struct icap_channel *ch = (struct icap_channel*)arg;
@@ -869,7 +1015,8 @@ void *channel_logger(void *arg)
 		for(int i=0;i<rcvCnt;i++)
 		{
 			fprintf(log,"%" PRIu64 ", %" PRIu64 "\n",ts2[i],ts[i]);
-			//fprintf(stdout,"CH%d - Local:%" PRIu64 ", Global:%lf sec, %llunsec\n",ch->idx,ts2[i],(ts[i]/1e9),ts[i]%1000000000);
+			if(logger_verbose)
+				fprintf(stdout,"[icap logger CH%d] %llusec, %llunsec\n",ch->idx,(ts[i]/1000000000),ts[i]%1000000000);
 		}
 	}
 
@@ -1417,10 +1564,48 @@ int init_rtio(struct timer_setup_t setup)
 	int err = 0;
 	double trigger_period;
 
+	// create pipes for cpts timestamp forwarding
+	if(create_cpts_channels())
+	{
+		fprintf(stderr,"CPTS channel error.\n");
+		return -1;
+	}
 
-	// parse trigger settings
+	// parse hw settings
 	if(parse_setup(setup))
 		return -1;
+
+	// init /dev/ptp0 clock
+	if(ptp_open())
+	{
+		fprintf(stderr,"Cannot open PTP device.\n");
+		return -1;
+	}
+	if(setup.dmtimer4_cpts_hwts_en)
+	{
+		ptp_disable_hwts(0);
+		ptp_enable_hwts(0);
+	}
+	ptp_disable_hwts(TIMER5_HWTS_PUSH_INDEX);
+
+	if(ptp_enable_hwts(TIMER5_HWTS_PUSH_INDEX))
+	{
+		fprintf(stderr,"Cannot enable DMTimer 5 HWTS generation.\n");
+		return -1;
+	}
+
+	if(setup.dmtimer6_cpts_hwts_en)
+	{
+		ptp_disable_hwts(2);
+		ptp_enable_hwts(2);
+	}
+	if(setup.dmtimer7_cpts_hwts_en)
+	{
+		ptp_disable_hwts(3);
+		ptp_enable_hwts(3);
+	}
+
+
 
 	trigger_period = (double)((0xFFFFFFFF - trigger_timer->load)+1) * 1000 / 24 / 1e9 ;
 	tk = timekeeper_create(0,trigger_period, SYNC_OFFSET, TIMEKEEPER_LOG_NAME);
@@ -1482,6 +1667,9 @@ int init_rtio(struct timer_setup_t setup)
 		close_timers();
 		timekeeper_destroy(tk);
 	}
+
+
+
 	return 0;
 }
 
@@ -1504,8 +1692,58 @@ void close_rtio()
 
 	pthread_join(tk_thread,&ret);
 
+
 	close_timers();
 	timekeeper_destroy(tk);
+
+
+	ptp_disable_hwts(0);
+	ptp_disable_hwts(1);
+	ptp_disable_hwts(2);
+	ptp_disable_hwts(3);
+	ptp_close();
+	close_cpts_channels();
+}
+
+struct ts_channel *get_ts_channel(int channel_idx)
+{
+	switch(channel_idx)
+	{
+		case -7:
+			return &cpts_channels[3].ts_ch;
+			break;
+		case -6:
+			return &cpts_channels[2].ts_ch;
+			break;
+		case -5:
+			return &cpts_channels[2].ts_ch;
+			break;
+		case -4:
+			return &cpts_channels[1].ts_ch;
+			break;
+						
+		case 0:
+			return &ecaps[0].channel.ts_ch;
+			break;
+		case 2:
+			return &ecaps[2].channel.ts_ch;
+			break;
+		case 4:
+			return &dmts[0].channel.ts_ch;
+			break;
+		case 5:
+			return &dmts[1].channel.ts_ch;
+			break;
+		case 6:
+			return &dmts[2].channel.ts_ch;
+			break;
+		case 7:
+			return &dmts[3].channel.ts_ch;
+			break;
+		default:
+			return NULL;
+	}
+	return NULL;
 }
 
 struct icap_channel *get_channel(int timer_idx)
@@ -1535,8 +1773,7 @@ struct icap_channel *get_channel(int timer_idx)
 	}
 	return NULL;
 }
-
-int start_icap_logging(int timer_idx)
+int start_icap_logging(int timer_idx, int verbose)
 {
 	int err;
 
@@ -1558,6 +1795,9 @@ int start_icap_logging(int timer_idx)
 
 	fprintf(stderr,"Starting icap logger on channel %d.\n",timer_idx);
 
+	if(verbose)
+		logger_verbose = 1;
+
 	err = pthread_create(&workers[worker_cnt++], NULL, channel_logger, (void*)c);
 	if(err)
 	{
@@ -1568,12 +1808,43 @@ int start_icap_logging(int timer_idx)
 	return 0;
 }
 
-struct PPS_servo_t pps;
+
+struct dmtimer *get_dmtimer(int dmtimer_idx)
+{
+	switch(dmtimer_idx)
+	{
+		case 4:
+			return &dmts[0];
+			break;
+		case 5:
+			return &dmts[1];
+			break;
+		case 6:
+			return &dmts[2];
+			break;
+		case 7:
+			return &dmts[3];
+			break;
+		default:
+			return NULL;
+	}
+	return NULL;
+}
+
+
 int start_npps_generator(int icap_timer_idx, int pwm_timer_idx, uint32_t pps_period_ms, uint32_t hw_prescaler, int verbose_level)
 {
+	struct nPPS_servo_t *npps;
 	struct icap_channel *c;
 	struct dmtimer *d;
 	int err;
+
+	npps = (struct nPPS_servo_t*)malloc(sizeof(struct nPPS_servo_t));
+	if(!npps)
+	{
+		fprintf(stderr,"Cannot alloc memory for pps descriptor.\n");
+		return -1;
+	}
 
 	c = get_channel(icap_timer_idx);
 	if(!c)
@@ -1582,12 +1853,13 @@ int start_npps_generator(int icap_timer_idx, int pwm_timer_idx, uint32_t pps_per
 		return -1;
 	}
 
-	if(pwm_timer_idx < 4 || pwm_timer_idx > 7)
+	d = get_dmtimer(pwm_timer_idx);
+	if(!d)
 	{
 		fprintf(stderr,"Invalid dmtimer index.\n");
 		return -1;
 	}
-	d = &dmts[pwm_timer_idx-4];
+	
 	if(!d->enable_oc)
 	{
 		fprintf(stderr,"Timer is not in PWM mode.\n");
@@ -1608,7 +1880,7 @@ int start_npps_generator(int icap_timer_idx, int pwm_timer_idx, uint32_t pps_per
 
 	if(hw_prescaler != 1 && icap_timer_idx != 0 && icap_timer_idx != 2)
 	{
-		fprintf(stderr,"Clock divigin is only supported on the eCAP peripherals.\n");
+		fprintf(stderr,"Clock dividing is only supported on the eCAP peripherals.\n");
 		return -1;
 	}
 
@@ -1622,21 +1894,64 @@ int start_npps_generator(int icap_timer_idx, int pwm_timer_idx, uint32_t pps_per
 	}
 
 
-	pps.feedback_channel = c;	
-	pps.pwm_gen = d;
-	pps.period_ms = pps_period_ms;
-	pps.hw_prescaler = hw_prescaler;
-	pps.verbose_level = verbose_level;
+	npps->feedback_channel = c;	
+	npps->pwm_gen = d;
+	npps->period_ms = pps_period_ms;
+	npps->hw_prescaler = hw_prescaler;
+	npps->verbose_level = verbose_level;
 
-	fprintf(stderr,"Starting PPS generation on %s using icap channel %s as feedback.\nnPPS period: %dms, hw prescale rate: %d.\n",d->name, c->dev_path,pps_period_ms, hw_prescaler);
+	fprintf(stderr,"Starting nPPS generation on %s using icap channel %s as feedback.\nnPPS period: %dms, hw prescale rate: %d.\n",d->name, c->dev_path,pps_period_ms, hw_prescaler);
 
-	err = pthread_create(&workers[worker_cnt++], NULL, pps_worker, (void*)&pps);
+	err = pthread_create(&workers[worker_cnt++], NULL, npps_worker, (void*)npps);
 	if(err)
 		fprintf(stderr,"Cannot start the PPS servo thread.\n");
 	return 0;
 }
 
-int start_pps_generator(int icap_timer_idx, int pwm_timer_idx)
+
+int start_pps_generator(int ts_channel_idx, int pwm_timer_idx, int verbose_level)
 {
-	return start_npps_generator(icap_timer_idx, pwm_timer_idx, 1000, 1, 2);
+	struct PPS_servo_t *pps;
+	struct ts_channel *c;
+	struct dmtimer *d;
+	int err;
+
+	pps = (struct PPS_servo_t*)malloc(sizeof(struct PPS_servo_t));
+	if(!pps)
+	{
+		fprintf(stderr,"Cannot alloc memory for pps descriptor.\n");
+		return -1;
+	}
+
+	c = get_ts_channel(ts_channel_idx);
+	if(!c)
+	{
+		fprintf(stderr,"Inalvid timer idx for channel logging.\n");
+		return -1;
+	}
+
+	d = get_dmtimer(pwm_timer_idx);
+	if(!d)
+	{
+		fprintf(stderr,"Invalid dmtimer index.\n");
+		return -1;
+	}
+	d = &dmts[pwm_timer_idx-4];
+	if(!d->enable_oc)
+	{
+		fprintf(stderr,"Timer is not in PWM mode.\n");
+		return -1;
+	}
+
+
+	pps->feedback_channel = c;	
+	pps->pwm_gen = d;
+	pps->verbose_level = verbose_level;
+
+	fprintf(stderr,"Starting PPS generation on %s.\n",d->name);
+
+	err = pthread_create(&workers[worker_cnt++], NULL, pps_worker, (void*)pps);
+	if(err)
+		fprintf(stderr,"Cannot start the PPS servo thread.\n");
+	return 0;
 }

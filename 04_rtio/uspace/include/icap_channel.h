@@ -3,7 +3,19 @@
 
 #include <stdint.h>
 #include <sys/ioctl.h>
-#include "icap_channel_API.h"
+#include "RTIO_API.h"
+
+
+// DMTimer5 load value (related to CPTS query period)
+#ifdef TI_KERNEL
+	//#warning "CPTS poll period: 700msec"
+	#define DMTIMER5_LOAD_VALUE			(0xFF000000UL) 	// !! use it for TI kernels !!
+#else
+	//#warning "CPTS poll period: 350msec"
+	#define DMTIMER5_LOAD_VALUE			(0xFF800000UL) 		// !! use it for mainline kernel with CPTS patch !!
+#endif
+
+
 
 // dmtimer registers
 #define DMTIMER_TIDR				0x00
@@ -92,6 +104,20 @@
 
 
 // structure definitions
+struct ts_channel
+{
+	void *ch;
+	int (*read)(struct ts_channel *ch, uint64_t *buff, int len);
+	int (*flush)(struct ts_channel *ch);
+};
+
+struct cpts_channel
+{
+	int idx;
+	int fd_read;
+	int fd_write;
+	struct ts_channel ts_ch;
+};
 
 struct icap_channel
 {
@@ -101,6 +127,8 @@ struct icap_channel
 	int32_t offset;
 	uint64_t mult;
 	uint64_t div;
+
+	struct ts_channel ts_ch;
 };
 
 
@@ -186,17 +214,12 @@ void disable_channel(struct icap_channel *c);
 // dmtimer
 int init_dmtimer(struct dmtimer *t);
 void close_dmtimer(struct dmtimer *t);
-int dmtimer_pwm_apply_offset(struct dmtimer *t, int32_t offset);
-int dmtimer_pwm_set_period(struct dmtimer *t, uint32_t period);
-int dmtimer_pwm_setup(struct dmtimer *t, uint32_t period, uint32_t duty);
-int dmtimer_set_pin_dir(struct dmtimer *t, uint8_t dir);
-void dmtimer_start_timer(struct dmtimer *t);
-void dmtimer_stop_timer(struct dmtimer *t);
+
 
 
 // structures for the pps generation
 extern struct timekeeper *tk;
-extern int rtio_quit;
+extern volatile int rtio_quit;
 
 
 #endif

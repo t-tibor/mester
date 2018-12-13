@@ -18,12 +18,12 @@
  */
 #include <string.h>
 
- #include "config.h"
-#include "linreg.h"
+ #include "servo/config.h"
+#include "servo/linreg.h"
 // #include "ntpshm.h"
 // #include "nullf.h"
-#include "pi.h"
-#include "servo_private.h"
+#include "servo/pi.h"
+#include "servo/servo_private.h"
 
 #define NSEC_PER_SEC 1000000000
 

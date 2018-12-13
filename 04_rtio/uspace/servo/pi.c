@@ -20,10 +20,10 @@
 #include <stdlib.h>
 #include <math.h>
 
-#include "config.h"
-#include "pi.h"
-#include "print.h"
-#include "servo_private.h"
+#include "servo/config.h"
+#include "servo/pi.h"
+#include "servo/print.h"
+#include "servo/servo_private.h"
 
 #define HWTS_KP_SCALE 0.7
 #define HWTS_KI_SCALE 0.3
